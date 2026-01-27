@@ -9,8 +9,6 @@ function App() {
     const [showNewCategoryInput, setShowNewCategoryInput] = useState(false)
     const [newCategoryName, setNewCategoryName] = useState('')
     const [selectedMonth, setSelectedMonth] = useState(new Date().toISOString().slice(0, 7)) // YYYY-MM
-    const [authorizations, setAuthorizations] = useState<Record<string, boolean>>({ leo: false, cris: false })
-    const [showPartnerPrivate, setShowPartnerPrivate] = useState(false)
 
     // Form State
     const [isExpense, setIsExpense] = useState(true)
@@ -126,17 +124,9 @@ function App() {
         )
     }
 
-    const visibleTransactions = transactions.filter(tx => {
-        const isOwner = tx.ownerId === currentUser.id
-        const isShared = tx.scope === 'SHARED'
-        const partnerId = currentUser.id === 'leo' ? 'cris' : 'leo'
-        const isAuthorized = authorizations[partnerId]
-
-        if (isShared || isOwner) return true
-        if (showPartnerPrivate && isAuthorized && tx.ownerId === partnerId) return true
-
-        return false
-    })
+    const visibleTransactions = transactions.filter(tx =>
+        tx.scope === 'SHARED' || tx.ownerId === currentUser.id
+    )
 
     const sharedExpenses = transactions.filter(tx => tx.scope === 'SHARED' && tx.type === 'expense')
     const totalShared = sharedExpenses.reduce((acc, tx) => acc + Number(tx.amount), 0)
@@ -147,25 +137,40 @@ function App() {
     const crisPercent = totalShared > 0 ? (crisShared / totalShared) * 100 : 50
 
     // Monthly Data Logic
-    const getMonthlyTotals = () => {
-        const months: Record<string, number> = {}
-        sharedExpenses.forEach(tx => {
+    const getMonthlyStats = () => {
+        const stats: Record<string, { shared: number, leo: number, cris: number }> = {}
+        transactions.forEach(tx => {
             const m = tx.date.slice(0, 7)
-            months[m] = (months[m] || 0) + Number(tx.amount)
+            if (!stats[m]) stats[m] = { shared: 0, leo: 0, cris: 0 }
+
+            if (tx.type === 'expense') {
+                if (tx.scope === 'SHARED') stats[m].shared += Number(tx.amount)
+                else if (tx.ownerId === 'leo') stats[m].leo += Number(tx.amount)
+                else if (tx.ownerId === 'cris') stats[m].cris += Number(tx.amount)
+            }
         })
-        return months
+        return stats
     }
 
-    const monthlyTotals = getMonthlyTotals()
+    const monthlyStats = getMonthlyStats()
     const last3Months = Array.from({ length: 3 }, (_, i) => {
         const d = new Date()
         d.setMonth(d.getMonth() - i)
         return d.toISOString().slice(0, 7)
     }).reverse()
 
-    const currentMonthShared = sharedExpenses
-        .filter(tx => tx.date.startsWith(selectedMonth))
+    const currentMonthTxs = transactions.filter(tx => tx.date.startsWith(selectedMonth))
 
+    // Income Calculations (Visible to both)
+    const coupleTotalIncome = transactions
+        .filter(tx => tx.type === 'income' && tx.date.startsWith(selectedMonth))
+        .reduce((acc, tx) => acc + Number(tx.amount), 0)
+
+    const myIncome = currentMonthTxs
+        .filter(tx => tx.type === 'income' && tx.ownerId === currentUser.id)
+        .reduce((acc, tx) => acc + Number(tx.amount), 0)
+
+    const currentMonthShared = currentMonthTxs.filter(tx => tx.scope === 'SHARED' && tx.type === 'expense')
     const currentMonthTotal = currentMonthShared.reduce((acc, tx) => acc + Number(tx.amount), 0)
     const currentMonthLeo = currentMonthShared.filter(tx => tx.ownerId === 'leo').reduce((acc, tx) => acc + Number(tx.amount), 0)
     const currentMonthCris = currentMonthShared.filter(tx => tx.ownerId === 'cris').reduce((acc, tx) => acc + Number(tx.amount), 0)
@@ -177,6 +182,10 @@ function App() {
         const [year, month] = m.split('-')
         return new Date(Number(year), Number(month) - 1).toLocaleString('pt-BR', { month: 'short' })
     }
+
+    const totalSharedAllTime = transactions
+        .filter(tx => tx.scope === 'SHARED' && tx.type === 'expense')
+        .reduce((acc, tx) => acc + Number(tx.amount), 0)
 
     return (
         <div className="layout-root">
@@ -225,7 +234,7 @@ function App() {
                                         value={selectedMonth}
                                         onChange={(e) => setSelectedMonth(e.target.value)}
                                     >
-                                        {[...new Set([selectedMonth, ...Object.keys(monthlyTotals)])].sort().reverse().map(m => (
+                                        {[...new Set([selectedMonth, ...Object.keys(monthlyStats)])].sort().reverse().map(m => (
                                             <option key={m} value={m}>{monthName(m)} / {m.split('-')[0]}</option>
                                         ))}
                                     </select>
@@ -242,7 +251,7 @@ function App() {
                                     </div>
                                 </div>
                                 <p className="description">
-                                    Total acumulado (todos os meses): R$ {totalShared.toFixed(2)}
+                                    Total acumulado (todos os meses): R$ {totalSharedAllTime.toFixed(2)}
                                 </p>
                             </div>
                         </div>
@@ -250,60 +259,77 @@ function App() {
                         {/* Comparative Monthly Chart */}
                         <div className="card glass-panel animate-fade-in" style={{ gridColumn: 'span 1' }}>
                             <div className="card-header">
-                                <h2>Comparativo Mensal</h2>
+                                <h2>Histórico Comparativo</h2>
                                 <TrendingUp className="status-icon" size={16} />
                             </div>
-                            <div className="chart-container">
-                                {last3Months.map(m => {
-                                    const amount = monthlyTotals[m] || 0
-                                    const max = Math.max(...Object.values(monthlyTotals), 1)
-                                    const height = (amount / max) * 100
-                                    return (
-                                        <div key={m} className="chart-bar-group">
-                                            <div className="bar-wrapper">
-                                                <div
-                                                    className="chart-bar"
-                                                    style={{ height: `${height}%` }}
-                                                    title={`R$ ${amount.toFixed(2)}`}
-                                                ></div>
+                            <div className="chart-container multi-bar">
+                                {(() => {
+                                    const allVals = last3Months.flatMap(m => {
+                                        const s = monthlyStats[m] || { shared: 0, leo: 0, cris: 0 }
+                                        return [s.shared, s.leo, s.cris]
+                                    })
+                                    const maxVal = Math.max(...allVals, 1)
+
+                                    return last3Months.map(m => {
+                                        const s = monthlyStats[m] || { shared: 0, leo: 0, cris: 0 }
+                                        return (
+                                            <div key={m} className="chart-bar-group">
+                                                <div className="bar-trio">
+                                                    <div className="bar-wrapper mini" title={`Leo Privado: R$ ${s.leo.toFixed(2)}`}>
+                                                        <div className="chart-bar leo-v" style={{ height: `${(s.leo / maxVal) * 100}%` }}></div>
+                                                    </div>
+                                                    <div className="bar-wrapper mini" title={`Cris Privada: R$ ${s.cris.toFixed(2)}`}>
+                                                        <div className="chart-bar cris-v" style={{ height: `${(s.cris / maxVal) * 100}%` }}></div>
+                                                    </div>
+                                                    <div className="bar-wrapper mini" title={`Compartilhado: R$ ${s.shared.toFixed(2)}`}>
+                                                        <div className="chart-bar shared-v" style={{ height: `${(s.shared / maxVal) * 100}%` }}></div>
+                                                    </div>
+                                                </div>
+                                                <span className="bar-label">{monthName(m)}</span>
                                             </div>
-                                            <span className="bar-label">{monthName(m)}</span>
-                                        </div>
-                                    )
-                                })}
+                                        )
+                                    })
+                                })()}
+                            </div>
+                            <div className="chart-legend">
+                                <span className="leg-item"><i className="dot leo"></i> Leo</span>
+                                <span className="leg-item"><i className="dot cris"></i> Cris</span>
+                                <span className="leg-item"><i className="dot shared"></i> Casal</span>
                             </div>
                         </div>
 
-                        {/* Copilot Simulator */}
-                        <div className="card glass-panel ai-card animate-fade-in" style={{ gridRow: 'span 2' }}>
+                        {/* Shared Gains Card */}
+                        <div className="card glass-panel ai-card animate-fade-in">
                             <div className="card-header">
                                 <div className="title-with-icon">
-                                    <BrainCircuit className="accent-icon" />
-                                    <h2>Simulador Copilot</h2>
+                                    <TrendingUp className="accent-icon" />
+                                    <h2>Renda Total do Casal</h2>
                                 </div>
                             </div>
-                            <div className="simulator-content">
-                                <div className="chat-simulation">
-                                    <div className="message bot">
-                                        "Analisando os gastos compartilhados de ambos... A Cristiane adicionou um gasto de Moradia hoje."
-                                    </div>
-                                    <div className="message bot alert">
-                                        <ShieldAlert className="inline-icon" /> "Alerta: O saldo livre do Leonardo está 10% abaixo do planejado para este mês."
-                                    </div>
-                                </div>
-                                <button className="btn-ai">Análise de Equidade</button>
+                            <div className="balance-info">
+                                <span className="amount">R$ {coupleTotalIncome.toFixed(2)}</span>
+                                <span className="subtitle">Soma de rendas (visível aos dois)</span>
                             </div>
                         </div>
 
                         {/* Personal Budget Card */}
                         <div className="card glass-panel animate-fade-in">
                             <div className="card-header">
-                                <h2>Seu Dinheiro Livre ({currentUser.name})</h2>
+                                <h2>Seu Orçamento ({currentUser.name})</h2>
                                 <ShieldAlert className="privacy-icon" />
                             </div>
                             <div className="balance-info">
-                                <span className="amount">R$ 1.250,00</span>
-                                <span className="subtitle">Somente você vê os detalhes disso</span>
+                                <div className="income-split">
+                                    <div>
+                                        <p className="subtitle">Seus Ganhos</p>
+                                        <span className="amount small">R$ {myIncome.toFixed(2)}</span>
+                                    </div>
+                                    <div>
+                                        <p className="subtitle">Disponível</p>
+                                        <span className="amount small">R$ 1.250,00</span>
+                                    </div>
+                                </div>
+                                <span className="subtitle mt-12">Somente você vê seus detalhes privados</span>
                             </div>
                         </div>
                     </section>
@@ -311,34 +337,20 @@ function App() {
                     <section className="couple-view animate-fade-in">
                         <div className="card glass-panel">
                             <div className="card-header">
-                                <h2>Configurações do Casal</h2>
+                                <h2>Equidade & Configurações</h2>
                                 <Users className="accent-icon" />
                             </div>
-                            <div className="permission-settings">
-                                <div className="permission-item">
-                                    <div className="perm-info">
-                                        <h3>Privacidade de Dados</h3>
-                                        <p>Autorize seu parceiro a visualizar suas transações privadas em tempo real.</p>
-                                    </div>
-                                    <div className="auth-toggle-group">
-                                        <div className="user-auth-status">
-                                            <span>Minha Autorização:</span>
-                                            <button
-                                                className={`btn-toggle ${authorizations[currentUser.id] ? 'active' : ''}`}
-                                                onClick={() => setAuthorizations({ ...authorizations, [currentUser.id]: !authorizations[currentUser.id] })}
-                                            >
-                                                {authorizations[currentUser.id] ? 'Autorizado' : 'Privado'}
-                                            </button>
+                            <div className="equity-details">
+                                <p>A divisão sugerida pela IA baseada na renda total de R$ {coupleTotalIncome.toFixed(2)} é de 60% para Leonardo e 40% para Cristiane.</p>
+                                <div className="equity-visualizer" style={{ marginTop: '20px' }}>
+                                    <div className="equity-bar">
+                                        <div className="equity-fill p1" style={{ width: '60%', background: 'var(--accent-primary)' }}>
+                                            <span className="label">Leo (60%)</span>
+                                        </div>
+                                        <div className="equity-fill p2" style={{ width: '40%', background: 'var(--accent-secondary)' }}>
+                                            <span className="label">Cris (40%)</span>
                                         </div>
                                     </div>
-                                </div>
-                                <div className="permission-alert">
-                                    <ShieldAlert />
-                                    <span>
-                                        {authorizations[currentUser.id === 'leo' ? 'cris' : 'leo']
-                                            ? 'Seu parceiro autorizou você a ver os dados dele.'
-                                            : 'Seu parceiro mantém os dados privados no momento.'}
-                                    </span>
                                 </div>
                             </div>
                         </div>
@@ -466,26 +478,14 @@ function App() {
 
                         <div className="recent-list glass-panel">
                             <div className="list-header-actions">
-                                <h3>Transações</h3>
-                                {authorizations[currentUser.id === 'leo' ? 'cris' : 'leo'] && (
-                                    <div className="partner-toggle">
-                                        <label className="switch-label">
-                                            <input
-                                                type="checkbox"
-                                                checked={showPartnerPrivate}
-                                                onChange={(e) => setShowPartnerPrivate(e.target.checked)}
-                                            />
-                                            <span>Ver dados do parceiro</span>
-                                        </label>
-                                    </div>
-                                )}
+                                <h3>Suas Transações & Compartilhadas</h3>
                             </div>
                             <div className="tx-list">
                                 {visibleTransactions.length === 0 ? (
                                     <p className="empty-msg">Nenhuma transação registrada ainda.</p>
                                 ) : (
                                     visibleTransactions.map(tx => (
-                                        <div key={tx.id} className={`tx-item ${tx.type} ${tx.ownerId !== currentUser.id ? 'partner-tx' : ''}`}>
+                                        <div key={tx.id} className={`tx-item ${tx.type}`}>
                                             <div className="tx-main">
                                                 <div className="tx-header-row">
                                                     <span className="tx-cat">{tx.category}</span>
@@ -624,7 +624,22 @@ function App() {
         .list-header-actions { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
         .partner-toggle { font-size: 0.85rem; color: var(--text-secondary); }
         .switch-label { display: flex; align-items: center; gap: 8px; cursor: pointer; }
-        .partner-tx { background: rgba(139, 92, 246, 0.05) !important; border-left-style: dashed !important; }
+
+        .income-split { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+        .amount.small { font-size: 1.4rem; }
+        .mt-12 { margin-top: 12px; }
+
+        .bar-trio { display: flex; gap: 4px; height: 100px; align-items: flex-end; }
+        .bar-wrapper.mini { width: 10px; height: 100%; display: flex; align-items: flex-end; background: rgba(255,255,255,0.03); border-radius: 2px; }
+        .chart-bar.leo-v { background: var(--accent-primary); }
+        .chart-bar.cris-v { background: #10b981; }
+        .chart-bar.shared-v { background: var(--accent-secondary); }
+        .chart-legend { display: flex; justify-content: center; gap: 16px; margin-top: 16px; font-size: 0.75rem; color: var(--text-secondary); }
+        .leg-item { display: flex; align-items: center; gap: 6px; }
+        .dot { width: 8px; height: 8px; border-radius: 2px; }
+        .dot.leo { background: var(--accent-primary); }
+        .dot.cris { background: #10b981; }
+        .dot.shared { background: var(--accent-secondary); }
       `}</style>
         </div>
     );
