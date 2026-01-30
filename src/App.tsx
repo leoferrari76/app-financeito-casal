@@ -108,6 +108,13 @@ function App() {
         })
     }
 
+    const formatCurrency = (value: number) => {
+        return new Intl.NumberFormat('pt-BR', {
+            style: 'currency',
+            currency: 'BRL',
+        }).format(value)
+    }
+
     if (!currentUser) {
         return (
             <div className="auth-screen animate-fade-in">
@@ -376,7 +383,7 @@ function App() {
                                         ))}
                                     </select>
                                 </div>
-                                <span className="badge">Mês: R$ {currentMonthTotal.toFixed(2)}</span>
+                                <span className="badge">Mês: {formatCurrency(currentMonthTotal)}</span>
                             </div>
                             <div className="equity-visualizer">
                                 <div className="equity-bar">
@@ -388,7 +395,7 @@ function App() {
                                     </div>
                                 </div>
                                 <p className="description">
-                                    Total acumulado (todos os meses): R$ {totalSharedAllTime.toFixed(2)}
+                                    Total acumulado (todos os meses): {formatCurrency(totalSharedAllTime)}
                                 </p>
                             </div>
                         </div>
@@ -412,13 +419,13 @@ function App() {
                                         return (
                                             <div key={m} className="chart-bar-group">
                                                 <div className="bar-trio">
-                                                    <div className="bar-wrapper mini" title={`Leo Privado: R$ ${s.leo.toFixed(2)}`}>
+                                                    <div className="bar-wrapper mini" title={`Leo Privado: ${formatCurrency(s.leo)}`}>
                                                         <div className="chart-bar leo-v" style={{ height: `${(s.leo / maxVal) * 100}%` }}></div>
                                                     </div>
-                                                    <div className="bar-wrapper mini" title={`Cris Privada: R$ ${s.cris.toFixed(2)}`}>
+                                                    <div className="bar-wrapper mini" title={`Cris Privada: ${formatCurrency(s.cris)}`}>
                                                         <div className="chart-bar cris-v" style={{ height: `${(s.cris / maxVal) * 100}%` }}></div>
                                                     </div>
-                                                    <div className="bar-wrapper mini" title={`Compartilhado: R$ ${s.shared.toFixed(2)}`}>
+                                                    <div className="bar-wrapper mini" title={`Compartilhado: ${formatCurrency(s.shared)}`}>
                                                         <div className="chart-bar shared-v" style={{ height: `${(s.shared / maxVal) * 100}%` }}></div>
                                                     </div>
                                                 </div>
@@ -444,7 +451,7 @@ function App() {
                                 </div>
                             </div>
                             <div className="balance-info">
-                                <span className="amount">R$ {coupleTotalIncome.toFixed(2)}</span>
+                                <span className="amount">{formatCurrency(coupleTotalIncome)}</span>
                                 <span className="subtitle">Soma de rendas (visível aos dois)</span>
                             </div>
                         </div>
@@ -459,14 +466,14 @@ function App() {
                                 <div className="stat-item">
                                     <span className="dot fixed"></span>
                                     <div className="stat-info">
-                                        <p>Fixos: R$ {currentMonthFixed.toFixed(2)}</p>
+                                        <p>Fixos: {formatCurrency(currentMonthFixed)}</p>
                                         <div className="mini-progress"><div className="fill fixed" style={{ width: `${fixedPercent}%` }}></div></div>
                                     </div>
                                 </div>
                                 <div className="stat-item">
                                     <span className="dot variable"></span>
                                     <div className="stat-info">
-                                        <p>Variáveis: R$ {currentMonthVariable.toFixed(2)}</p>
+                                        <p>Variáveis: {formatCurrency(currentMonthVariable)}</p>
                                         <div className="mini-progress"><div className="fill variable" style={{ width: `${variablePercent}%` }}></div></div>
                                     </div>
                                 </div>
@@ -483,11 +490,11 @@ function App() {
                                 <div className="income-split">
                                     <div>
                                         <p className="subtitle">Seus Ganhos</p>
-                                        <span className="amount small">R$ {myIncome.toFixed(2)}</span>
+                                        <span className="amount small">{formatCurrency(myIncome)}</span>
                                     </div>
                                     <div>
                                         <p className="subtitle">Disponível</p>
-                                        <span className="amount small">R$ {myAvailable.toFixed(2)}</span>
+                                        <span className="amount small">{formatCurrency(myAvailable)}</span>
                                     </div>
                                 </div>
                                 <span className="subtitle mt-12">Somente você vê seus detalhes privados</span>
@@ -502,7 +509,7 @@ function App() {
                                 <Users className="accent-icon" />
                             </div>
                             <div className="equity-details">
-                                <p>A divisão sugerida pela IA baseada na renda total de R$ {coupleTotalIncome.toFixed(2)} é de {suggestedLeoPercent.toFixed(0)}% para Leonardo e {suggestedCrisPercent.toFixed(0)}% para Cristiane.</p>
+                                <p>A divisão sugerida pela IA baseada na renda total de {formatCurrency(coupleTotalIncome)} é de {suggestedLeoPercent.toFixed(0)}% para Leonardo e {suggestedCrisPercent.toFixed(0)}% para Cristiane.</p>
                                 <div className="equity-visualizer" style={{ marginTop: '20px' }}>
                                     <div className="equity-bar">
                                         <div className="equity-fill p1" style={{ width: `${suggestedLeoPercent}%`, background: 'var(--accent-primary)' }}>
@@ -542,9 +549,9 @@ function App() {
                                             return (
                                                 <tr key={item.month}>
                                                     <td className="month-name">{monthName(item.month)} {item.month.split('-')[0]}</td>
-                                                    <td>R$ {item.fixed.toFixed(2)}</td>
-                                                    <td>R$ {item.variable.toFixed(2)}</td>
-                                                    <td className="total-cell">R$ {item.total.toFixed(2)}</td>
+                                                    <td>{formatCurrency(item.fixed)}</td>
+                                                    <td>{formatCurrency(item.variable)}</td>
+                                                    <td className="total-cell">{formatCurrency(item.total)}</td>
                                                     <td>
                                                         {item.income > 0 ? (
                                                             <span className={`status-pill ${isOver ? 'danger' : 'success'}`}>
@@ -744,7 +751,7 @@ function App() {
                                                     </button>
                                                 </div>
                                                 <span className="tx-amount">
-                                                    {tx.type === 'expense' ? '-' : '+'} R$ {tx.amount}
+                                                    {tx.type === 'expense' ? '-' : '+'} {formatCurrency(Number(tx.amount))}
                                                 </span>
                                                 {tx.isCreditCard && (
                                                     <span className="tx-card-info">{tx.installments}x no cartão</span>
