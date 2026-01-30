@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { LayoutDashboard, Wallet, BrainCircuit, Users, Settings, TrendingUp, ShieldAlert } from 'lucide-react'
+import { LayoutDashboard, Wallet, BrainCircuit, Users, Settings, TrendingUp, ShieldAlert, Pencil, Trash2, X } from 'lucide-react'
 
 function App() {
     const [currentUser, setCurrentUser] = useState<any>(null)
@@ -9,6 +9,7 @@ function App() {
     const [showNewCategoryInput, setShowNewCategoryInput] = useState(false)
     const [newCategoryName, setNewCategoryName] = useState('')
     const [selectedMonth, setSelectedMonth] = useState(new Date().toISOString().slice(0, 7)) // YYYY-MM
+    const [editingId, setEditingId] = useState<number | null>(null)
 
     // Form State
     const [isExpense, setIsExpense] = useState(true)
@@ -39,15 +40,72 @@ function App() {
 
     const handleSubmit = (e: React.FormEvent) => {
         e.preventDefault()
-        const newTx = {
-            ...formData,
-            id: Date.now(),
-            type: isExpense ? 'expense' : 'income',
-            ownerId: currentUser.id,
-            scope: isShared ? 'SHARED' : 'PRIVATE'
+
+        if (editingId) {
+            setTransactions(transactions.map(tx =>
+                tx.id === editingId
+                    ? { ...formData, id: tx.id, type: isExpense ? 'expense' : 'income', ownerId: tx.ownerId, scope: isShared ? 'SHARED' : 'PRIVATE' }
+                    : tx
+            ))
+            setEditingId(null)
+            alert('Transação atualizada com sucesso!')
+        } else {
+            const newTx = {
+                ...formData,
+                id: Date.now(),
+                type: isExpense ? 'expense' : 'income',
+                ownerId: currentUser.id,
+                scope: isShared ? 'SHARED' : 'PRIVATE'
+            }
+            setTransactions([newTx, ...transactions])
+            alert('Transação adicionada com sucesso!')
         }
-        setTransactions([newTx, ...transactions])
-        alert('Transação adicionada com sucesso!')
+
+        // Reset form
+        setFormData({
+            amount: '',
+            category: '',
+            date: new Date().toISOString().split('T')[0],
+            isCreditCard: false,
+            installments: '1',
+            startDate: new Date().toISOString().split('T')[0],
+            expenseType: 'variable',
+        })
+    }
+
+    const handleDelete = (id: number) => {
+        if (window.confirm('Tem certeza que deseja excluir esta transação?')) {
+            setTransactions(transactions.filter(tx => tx.id !== id))
+        }
+    }
+
+    const handleEdit = (tx: any) => {
+        setEditingId(tx.id)
+        setIsExpense(tx.type === 'expense')
+        setIsShared(tx.scope === 'SHARED')
+        setFormData({
+            amount: tx.amount,
+            category: tx.category,
+            date: tx.date,
+            isCreditCard: tx.isCreditCard || false,
+            installments: tx.installments || '1',
+            startDate: tx.startDate || tx.date,
+            expenseType: tx.expenseType || 'variable',
+        })
+        window.scrollTo({ top: 0, behavior: 'smooth' })
+    }
+
+    const cancelEdit = () => {
+        setEditingId(null)
+        setFormData({
+            amount: '',
+            category: '',
+            date: new Date().toISOString().split('T')[0],
+            isCreditCard: false,
+            installments: '1',
+            startDate: new Date().toISOString().split('T')[0],
+            expenseType: 'variable',
+        })
     }
 
     if (!currentUser) {
@@ -620,7 +678,16 @@ function App() {
                                     </>
                                 )}
 
-                                <button type="submit" className="btn-save">Salvar Transação</button>
+                                <div className="form-actions-row">
+                                    <button type="submit" className="btn-save">
+                                        {editingId ? 'Atualizar Transação' : 'Salvar Transação'}
+                                    </button>
+                                    {editingId && (
+                                        <button type="button" className="btn-cancel" onClick={cancelEdit}>
+                                            <X size={16} /> Cancelar
+                                        </button>
+                                    )}
+                                </div>
                             </form>
                         </div>
 
@@ -649,6 +716,14 @@ function App() {
                                                 <span className="tx-date">{tx.date} • {tx.ownerId === 'leo' ? 'Leo' : 'Cris'}</span>
                                             </div>
                                             <div className="tx-details">
+                                                <div className="tx-actions">
+                                                    <button className="action-btn edit" onClick={() => handleEdit(tx)} title="Editar">
+                                                        <Pencil size={14} />
+                                                    </button>
+                                                    <button className="action-btn delete" onClick={() => handleDelete(tx.id)} title="Excluir">
+                                                        <Trash2 size={14} />
+                                                    </button>
+                                                </div>
                                                 <span className="tx-amount">
                                                     {tx.type === 'expense' ? '-' : '+'} R$ {tx.amount}
                                                 </span>
@@ -744,8 +819,11 @@ function App() {
         .expense-type-toggle button.active { background: var(--panel-bg); color: var(--text-primary); }
         .credit-details { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; padding: 16px; background: rgba(255,255,255,0.03); border-radius: 12px; border: 1px dashed var(--border-color); }
 
-        .btn-save { background: var(--accent-primary); color: white; border: none; padding: 16px; border-radius: 12px; font-weight: 700; font-size: 1.1rem; cursor: pointer; margin-top: 12px; transition: transform 0.2s; }
+        .btn-save { flex: 1; background: var(--accent-primary); color: white; border: none; padding: 16px; border-radius: 12px; font-weight: 700; font-size: 1.1rem; cursor: pointer; transition: transform 0.2s; }
         .btn-save:hover { transform: translateY(-2px); }
+        .form-actions-row { display: flex; gap: 12px; margin-top: 12px; }
+        .btn-cancel { padding: 16px; background: rgba(255,255,255,0.05); border: 1px solid var(--border-color); color: var(--text-secondary); border-radius: 12px; cursor: pointer; font-weight: 600; display: flex; align-items: center; gap: 8px; transition: all 0.2s; }
+        .btn-cancel:hover { background: rgba(255,255,255,0.1); color: var(--text-primary); }
 
         .recent-list { padding: 24px; display: flex; flex-direction: column; gap: 20px; }
         .tx-list { display: flex; flex-direction: column; gap: 12px; }
@@ -755,7 +833,12 @@ function App() {
         .tx-main { display: flex; flex-direction: column; }
         .tx-cat { font-weight: 600; }
         .tx-date { font-size: 0.8rem; color: var(--text-secondary); }
-        .tx-details { text-align: right; display: flex; flex-direction: column; }
+        .tx-details { text-align: right; display: flex; flex-direction: column; gap: 4px; }
+        .tx-actions { display: flex; gap: 8px; justify-content: flex-end; opacity: 0; transition: opacity 0.2s; }
+        .tx-item:hover .tx-actions { opacity: 1; }
+        .action-btn { background: rgba(255,255,255,0.05); border: 1px solid var(--border-color); color: var(--text-secondary); padding: 6px; border-radius: 6px; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: all 0.2s; }
+        .action-btn.edit:hover { background: rgba(59, 130, 246, 0.1); color: #3b82f6; border-color: #3b82f6; }
+        .action-btn.delete:hover { background: rgba(239, 68, 68, 0.1); color: #ef4444; border-color: #ef4444; }
         .tx-amount { font-weight: 700; font-size: 1.1rem; }
         .tx-card-info { font-size: 0.75rem; color: var(--accent-secondary); }
         .empty-msg { color: var(--text-secondary); text-align: center; padding: 40px; }
