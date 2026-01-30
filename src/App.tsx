@@ -193,6 +193,60 @@ function App() {
         .filter(tx => tx.scope === 'SHARED' && tx.type === 'expense')
         .reduce((acc, tx) => acc + Number(tx.amount), 0)
 
+    const getForecastData = () => {
+        const forecast = []
+        const now = new Date()
+
+        for (let i = 0; i < 12; i++) {
+            const d = new Date(now.getFullYear(), now.getMonth() + i, 1)
+            const monthStr = d.toISOString().slice(0, 7) // YYYY-MM
+
+            let fixed = 0
+            let variable = 0
+            let income = 0
+
+            transactions.forEach(tx => {
+                const amount = Number(tx.amount)
+                if (tx.scope !== 'SHARED') return // Forecast for Couple
+
+                if (tx.type === 'income') {
+                    // For now, assume income is monthly if added in the current or previous month
+                    // Or just count income added for that specific future month (if any)
+                    if (tx.date.startsWith(monthStr)) income += amount
+                } else {
+                    if (tx.expenseType === 'fixed') {
+                        fixed += amount
+                    } else if (tx.isCreditCard) {
+                        const installments = Number(tx.installments) || 1
+                        const startDate = new Date(tx.startDate)
+                        const startMonth = new Date(startDate.getFullYear(), startDate.getMonth(), 1)
+                        const currentForecastMonth = new Date(d.getFullYear(), d.getMonth(), 1)
+
+                        const diffMonths = (currentForecastMonth.getFullYear() - startMonth.getFullYear()) * 12 + (currentForecastMonth.getMonth() - startMonth.getMonth())
+
+                        if (diffMonths >= 0 && diffMonths < installments) {
+                            variable += amount / installments
+                        }
+                    } else {
+                        // Regular variable expenses only count for their specific month
+                        if (tx.date.startsWith(monthStr)) variable += amount
+                    }
+                }
+            })
+
+            forecast.push({
+                month: monthStr,
+                fixed,
+                variable,
+                total: fixed + variable,
+                income
+            })
+        }
+        return forecast
+    }
+
+    const forecastData = getForecastData()
+
     return (
         <div className="layout-root">
             {/* Sidebar */}
@@ -365,7 +419,7 @@ function App() {
                     </section>
                 ) : activeTab === 'couple' ? (
                     <section className="couple-view animate-fade-in">
-                        <div className="card glass-panel">
+                        <div className="card glass-panel" style={{ marginBottom: '24px' }}>
                             <div className="card-header">
                                 <h2>Equidade & Configurações</h2>
                                 <Users className="accent-icon" />
@@ -382,6 +436,52 @@ function App() {
                                         </div>
                                     </div>
                                 </div>
+                            </div>
+                        </div>
+
+                        <div className="card glass-panel animate-fade-in">
+                            <div className="card-header">
+                                <div className="title-stack">
+                                    <h2>Previsão de Gastos Compartilhados (12 Meses)</h2>
+                                    <p className="subtitle">Visão antecipada para planejamento familiar</p>
+                                </div>
+                                <TrendingUp className="accent-icon" />
+                            </div>
+
+                            <div className="forecast-table-container">
+                                <table className="forecast-table">
+                                    <thead>
+                                        <tr>
+                                            <th>Mês</th>
+                                            <th>Fixos</th>
+                                            <th>Variáveis/Parcelas</th>
+                                            <th>Total Previsto</th>
+                                            <th>Status</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {forecastData.map(item => {
+                                            const isOver = item.income > 0 && item.total > item.income
+                                            return (
+                                                <tr key={item.month}>
+                                                    <td className="month-name">{monthName(item.month)} {item.month.split('-')[0]}</td>
+                                                    <td>R$ {item.fixed.toFixed(2)}</td>
+                                                    <td>R$ {item.variable.toFixed(2)}</td>
+                                                    <td className="total-cell">R$ {item.total.toFixed(2)}</td>
+                                                    <td>
+                                                        {item.income > 0 ? (
+                                                            <span className={`status-pill ${isOver ? 'danger' : 'success'}`}>
+                                                                {isOver ? 'Déficit' : 'OK'}
+                                                            </span>
+                                                        ) : (
+                                                            <span className="status-pill neutral">Sem Renda Info</span>
+                                                        )}
+                                                    </td>
+                                                </tr>
+                                            )
+                                        })}
+                                    </tbody>
+                                </table>
                             </div>
                         </div>
                     </section>
@@ -711,6 +811,17 @@ function App() {
         .mini-progress .fill.variable { background: #10b981; }
         .dot.fixed { background: #f59e0b; }
         .dot.variable { background: #10b981; }
+
+        .forecast-table-container { margin-top: 10px; overflow-x: auto; }
+        .forecast-table { width: 100%; border-collapse: collapse; text-align: left; }
+        .forecast-table th { padding: 12px; font-size: 0.85rem; color: var(--text-secondary); border-bottom: 1px solid var(--border-color); }
+        .forecast-table td { padding: 12px; font-size: 0.95rem; border-bottom: 1px solid rgba(255,255,255,0.03); }
+        .forecast-table .month-name { font-weight: 600; text-transform: capitalize; color: var(--accent-primary); }
+        .forecast-table .total-cell { font-weight: 700; }
+        .status-pill { padding: 4px 8px; border-radius: 6px; font-size: 0.75rem; font-weight: 700; }
+        .status-pill.success { background: rgba(16, 185, 129, 0.1); color: #10b981; }
+        .status-pill.danger { background: rgba(239, 68, 68, 0.1); color: #ef4444; }
+        .status-pill.neutral { background: rgba(255, 255, 255, 0.05); color: var(--text-secondary); }
       `}</style>
         </div >
     );
