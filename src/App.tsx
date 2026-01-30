@@ -20,6 +20,7 @@ function App() {
         isCreditCard: false,
         installments: '1',
         startDate: new Date().toISOString().split('T')[0],
+        expenseType: 'variable', // fixed or variable
     })
 
     const users = [
@@ -178,6 +179,11 @@ function App() {
     const mLeoPercent = currentMonthTotal > 0 ? (currentMonthLeo / currentMonthTotal) * 100 : 50
     const mCrisPercent = currentMonthTotal > 0 ? (currentMonthCris / currentMonthTotal) * 100 : 50
 
+    const currentMonthFixed = currentMonthTxs.filter(tx => tx.type === 'expense' && tx.expenseType === 'fixed').reduce((acc, tx) => acc + Number(tx.amount), 0)
+    const currentMonthVariable = currentMonthTxs.filter(tx => tx.type === 'expense' && (tx.expenseType === 'variable' || !tx.expenseType)).reduce((acc, tx) => acc + Number(tx.amount), 0)
+    const fixedPercent = (currentMonthFixed + currentMonthVariable) > 0 ? (currentMonthFixed / (currentMonthFixed + currentMonthVariable)) * 100 : 0
+    const variablePercent = (currentMonthFixed + currentMonthVariable) > 0 ? (currentMonthVariable / (currentMonthFixed + currentMonthVariable)) * 100 : 0
+
     const monthName = (m: string) => {
         const [year, month] = m.split('-')
         return new Date(Number(year), Number(month) - 1).toLocaleString('pt-BR', { month: 'short' })
@@ -312,6 +318,30 @@ function App() {
                             </div>
                         </div>
 
+                        {/* Fixed vs Variable Breakdown Card */}
+                        <div className="card glass-panel animate-fade-in" style={{ gridColumn: 'span 1' }}>
+                            <div className="card-header">
+                                <h2>Distribuição de Gastos</h2>
+                                <BrainCircuit className="status-icon" size={16} />
+                            </div>
+                            <div className="breakdown-stats">
+                                <div className="stat-item">
+                                    <span className="dot fixed"></span>
+                                    <div className="stat-info">
+                                        <p>Fixos: R$ {currentMonthFixed.toFixed(2)}</p>
+                                        <div className="mini-progress"><div className="fill fixed" style={{ width: `${fixedPercent}%` }}></div></div>
+                                    </div>
+                                </div>
+                                <div className="stat-item">
+                                    <span className="dot variable"></span>
+                                    <div className="stat-info">
+                                        <p>Variáveis: R$ {currentMonthVariable.toFixed(2)}</p>
+                                        <div className="mini-progress"><div className="fill variable" style={{ width: `${variablePercent}%` }}></div></div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
                         {/* Personal Budget Card */}
                         <div className="card glass-panel animate-fade-in">
                             <div className="card-header">
@@ -436,6 +466,24 @@ function App() {
                                 </div>
 
                                 {isExpense && (
+                                    <div className="form-group expense-type-toggle animate-fade-in">
+                                        <label>Tipo de Gasto</label>
+                                        <div className="toggle-container">
+                                            <button
+                                                type="button"
+                                                className={formData.expenseType === 'fixed' ? 'active' : ''}
+                                                onClick={() => setFormData({ ...formData, expenseType: 'fixed' })}
+                                            >Fixo</button>
+                                            <button
+                                                type="button"
+                                                className={formData.expenseType === 'variable' ? 'active' : ''}
+                                                onClick={() => setFormData({ ...formData, expenseType: 'variable' })}
+                                            >Variável</button>
+                                        </div>
+                                    </div>
+                                )}
+
+                                {isExpense && (
                                     <>
                                         <div className="form-group checkbox-group">
                                             <label>
@@ -492,6 +540,11 @@ function App() {
                                                     <span className={`tx-scope-tag ${tx.scope.toLowerCase()}`}>
                                                         {tx.scope === 'SHARED' ? 'Casal' : 'Privado'}
                                                     </span>
+                                                    {tx.type === 'expense' && (
+                                                        <span className={`tx-type-tag ${tx.expenseType || 'variable'}`}>
+                                                            {tx.expenseType === 'fixed' ? 'Fixo' : 'Variável'}
+                                                        </span>
+                                                    )}
                                                 </div>
                                                 <span className="tx-date">{tx.date} • {tx.ownerId === 'leo' ? 'Leo' : 'Cris'}</span>
                                             </div>
@@ -508,9 +561,10 @@ function App() {
                                 )}
                             </div>
                         </div>
-                    </section>
-                )}
-            </main>
+                    </section >
+                )
+                }
+            </main >
 
             <style>{`
         /* Previous Styles */
@@ -560,6 +614,9 @@ function App() {
         .tx-scope-tag { font-size: 0.65rem; padding: 2px 6px; border-radius: 4px; font-weight: 700; text-transform: uppercase; }
         .tx-scope-tag.shared { background: rgba(59, 130, 246, 0.1); color: #3b82f6; }
         .tx-scope-tag.private { background: rgba(161, 161, 170, 0.1); color: #a1a1aa; }
+        .tx-type-tag { font-size: 0.6rem; padding: 2px 5px; border-radius: 4px; font-weight: 600; text-transform: uppercase; }
+        .tx-type-tag.fixed { background: rgba(245, 158, 11, 0.1); color: #f59e0b; }
+        .tx-type-tag.variable { background: rgba(16, 185, 129, 0.1); color: #10b981; }
 
         /* Transactions Layout */
         .transactions-view { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
@@ -582,6 +639,9 @@ function App() {
         .new-cat-input button { background: var(--accent-primary); border: none; color: white; padding: 0 12px; border-radius: 8px; }
 
         .checkbox-group label { display: flex; align-items: center; gap: 10px; cursor: pointer; }
+        .expense-type-toggle .toggle-container { display: flex; background: rgba(255,255,255,0.05); padding: 4px; border-radius: 10px; gap: 4px; }
+        .expense-type-toggle button { flex: 1; padding: 8px; border: none; background: transparent; color: var(--text-secondary); cursor: pointer; border-radius: 8px; font-size: 0.85rem; }
+        .expense-type-toggle button.active { background: var(--panel-bg); color: var(--text-primary); }
         .credit-details { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; padding: 16px; background: rgba(255,255,255,0.03); border-radius: 12px; border: 1px dashed var(--border-color); }
 
         .btn-save { background: var(--accent-primary); color: white; border: none; padding: 16px; border-radius: 12px; font-weight: 700; font-size: 1.1rem; cursor: pointer; margin-top: 12px; transition: transform 0.2s; }
@@ -640,8 +700,19 @@ function App() {
         .dot.leo { background: var(--accent-primary); }
         .dot.cris { background: #10b981; }
         .dot.shared { background: var(--accent-secondary); }
+
+        .breakdown-stats { display: flex; flex-direction: column; gap: 16px; }
+        .stat-item { display: flex; gap: 12px; align-items: center; }
+        .stat-info { flex: 1; display: flex; flex-direction: column; gap: 6px; }
+        .stat-info p { font-size: 0.85rem; color: var(--text-secondary); }
+        .mini-progress { height: 4px; background: rgba(255,255,255,0.05); border-radius: 2px; overflow: hidden; }
+        .mini-progress .fill { height: 100%; transition: width 0.3s; }
+        .mini-progress .fill.fixed { background: #f59e0b; }
+        .mini-progress .fill.variable { background: #10b981; }
+        .dot.fixed { background: #f59e0b; }
+        .dot.variable { background: #10b981; }
       `}</style>
-        </div>
+        </div >
     );
 }
 
