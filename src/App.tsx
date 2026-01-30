@@ -221,13 +221,19 @@ function App() {
     const currentMonthTxs = transactions.filter(tx => tx.date.startsWith(selectedMonth))
 
     // Income Calculations (Visible to both)
-    const coupleTotalIncome = transactions
-        .filter(tx => tx.type === 'income' && tx.date.startsWith(selectedMonth))
+    const leoIncome = transactions
+        .filter(tx => tx.type === 'income' && tx.ownerId === 'leo' && tx.date.startsWith(selectedMonth))
         .reduce((acc, tx) => acc + Number(tx.amount), 0)
 
-    const myIncome = currentMonthTxs
-        .filter(tx => tx.type === 'income' && tx.ownerId === currentUser.id)
+    const crisIncome = transactions
+        .filter(tx => tx.type === 'income' && tx.ownerId === 'cris' && tx.date.startsWith(selectedMonth))
         .reduce((acc, tx) => acc + Number(tx.amount), 0)
+
+    const coupleTotalIncome = leoIncome + crisIncome
+
+    // Dynamic split based on income
+    const suggestedLeoPercent = coupleTotalIncome > 0 ? (leoIncome / coupleTotalIncome) * 100 : 50
+    const suggestedCrisPercent = coupleTotalIncome > 0 ? (crisIncome / coupleTotalIncome) * 100 : 50
 
     const currentMonthShared = currentMonthTxs.filter(tx => tx.scope === 'SHARED' && tx.type === 'expense')
     const currentMonthTotal = currentMonthShared.reduce((acc, tx) => acc + Number(tx.amount), 0)
@@ -236,6 +242,19 @@ function App() {
 
     const mLeoPercent = currentMonthTotal > 0 ? (currentMonthLeo / currentMonthTotal) * 100 : 50
     const mCrisPercent = currentMonthTotal > 0 ? (currentMonthCris / currentMonthTotal) * 100 : 50
+
+    // Personal Budget Calculations
+    const myIncome = currentMonthTxs
+        .filter(tx => tx.type === 'income' && tx.ownerId === currentUser.id)
+        .reduce((acc, tx) => acc + Number(tx.amount), 0)
+
+    const myPrivateExpenses = currentMonthTxs
+        .filter(tx => tx.type === 'expense' && tx.scope === 'PRIVATE' && tx.ownerId === currentUser.id)
+        .reduce((acc, tx) => acc + Number(tx.amount), 0)
+
+    // My share of the shared expenses (based on current month total shared and suggested split)
+    const mySharedShare = (currentMonthTotal * (currentUser.id === 'leo' ? suggestedLeoPercent : suggestedCrisPercent)) / 100
+    const myAvailable = myIncome - myPrivateExpenses - mySharedShare
 
     const currentMonthFixed = currentMonthTxs.filter(tx => tx.type === 'expense' && tx.expenseType === 'fixed').reduce((acc, tx) => acc + Number(tx.amount), 0)
     const currentMonthVariable = currentMonthTxs.filter(tx => tx.type === 'expense' && (tx.expenseType === 'variable' || !tx.expenseType)).reduce((acc, tx) => acc + Number(tx.amount), 0)
@@ -468,7 +487,7 @@ function App() {
                                     </div>
                                     <div>
                                         <p className="subtitle">Disponível</p>
-                                        <span className="amount small">R$ 1.250,00</span>
+                                        <span className="amount small">R$ {myAvailable.toFixed(2)}</span>
                                     </div>
                                 </div>
                                 <span className="subtitle mt-12">Somente você vê seus detalhes privados</span>
@@ -483,14 +502,14 @@ function App() {
                                 <Users className="accent-icon" />
                             </div>
                             <div className="equity-details">
-                                <p>A divisão sugerida pela IA baseada na renda total de R$ {coupleTotalIncome.toFixed(2)} é de 60% para Leonardo e 40% para Cristiane.</p>
+                                <p>A divisão sugerida pela IA baseada na renda total de R$ {coupleTotalIncome.toFixed(2)} é de {suggestedLeoPercent.toFixed(0)}% para Leonardo e {suggestedCrisPercent.toFixed(0)}% para Cristiane.</p>
                                 <div className="equity-visualizer" style={{ marginTop: '20px' }}>
                                     <div className="equity-bar">
-                                        <div className="equity-fill p1" style={{ width: '60%', background: 'var(--accent-primary)' }}>
-                                            <span className="label">Leo (60%)</span>
+                                        <div className="equity-fill p1" style={{ width: `${suggestedLeoPercent}%`, background: 'var(--accent-primary)' }}>
+                                            <span className="label">Leo ({suggestedLeoPercent.toFixed(0)}%)</span>
                                         </div>
-                                        <div className="equity-fill p2" style={{ width: '40%', background: 'var(--accent-secondary)' }}>
-                                            <span className="label">Cris (40%)</span>
+                                        <div className="equity-fill p2" style={{ width: `${suggestedCrisPercent}%`, background: 'var(--accent-secondary)' }}>
+                                            <span className="label">Cris ({suggestedCrisPercent.toFixed(0)}%)</span>
                                         </div>
                                     </div>
                                 </div>
