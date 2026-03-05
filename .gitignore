@@ -14,3 +14,11 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Environment files
+.env
+.env*.local
+
+# Agent directories
+.agents/
+.gemini/

@@ -1,15 +1,129 @@
-import { useState } from 'react'
-import { LayoutDashboard, Wallet, BrainCircuit, Users, Settings, TrendingUp, ShieldAlert, Pencil, Trash2, X } from 'lucide-react'
+import { useState, useEffect } from 'react'
+import { BrainCircuit } from 'lucide-react'
+import { supabase } from './supabaseClient'
+
+// Components
+import { Sidebar } from './components/Sidebar'
+import { Dashboard } from './components/Dashboard'
+import { CoupleView } from './components/CoupleView'
+import { TransactionsView } from './components/TransactionsView'
 
 function App() {
+    const [session, setSession] = useState<any>(null)
     const [currentUser, setCurrentUser] = useState<any>(null)
+    const [partnerProfile, setPartnerProfile] = useState<any>(null)
+    const [partnerIncome, setPartnerIncome] = useState(0)
     const [activeTab, setActiveTab] = useState('dashboard')
     const [transactions, setTransactions] = useState<any[]>([])
-    const [categories, setCategories] = useState(['Moradia', 'Alimentação', 'Transporte', 'Lazer', 'Saúde'])
+    const [categories, setCategories] = useState<string[]>([])
     const [showNewCategoryInput, setShowNewCategoryInput] = useState(false)
     const [newCategoryName, setNewCategoryName] = useState('')
-    const [selectedMonth, setSelectedMonth] = useState(new Date().toISOString().slice(0, 7)) // YYYY-MM
+    const [selectedMonth, setSelectedMonth] = useState(new Date().toISOString().slice(0, 7))
     const [editingId, setEditingId] = useState<number | null>(null)
+    const [loading, setLoading] = useState(true)
+
+    useEffect(() => {
+        const init = async () => {
+            try {
+                const { data: { session } } = await supabase.auth.getSession()
+                setSession(session)
+                if (session) await fetchProfile(session.user.id)
+            } catch (err) {
+                console.error('Initialization error:', err)
+            } finally {
+                setLoading(false)
+            }
+        }
+        init()
+
+        const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+            setSession(session)
+            if (session) fetchProfile(session.user.id)
+            else {
+                setCurrentUser(null)
+                setPartnerProfile(null)
+            }
+        })
+
+        return () => subscription.unsubscribe()
+    }, [])
+
+    useEffect(() => {
+        if (session) {
+            fetchTransactions()
+            fetchCategories()
+        }
+    }, [session])
+
+    useEffect(() => {
+        if (currentUser?.partner_email) {
+            fetchPartnerData(currentUser.partner_email)
+        } else {
+            setPartnerProfile(null)
+            setPartnerIncome(0)
+        }
+    }, [currentUser, selectedMonth]) // Re-fetch partner income if month changes
+
+    const fetchProfile = async (userId: string) => {
+        const { data, error } = await supabase.from('profiles').select('*').eq('id', userId).single()
+        if (error) console.error('Error fetching profile:', error)
+        else setCurrentUser(data)
+    }
+
+    const fetchPartnerData = async (email: string) => {
+        // Fetch partner profile
+        const { data: profile, error: pError } = await supabase
+            .from('profiles')
+            .select('*')
+            .eq('email', email)
+            .single()
+
+        if (pError) {
+            console.error('Error fetching partner profile:', pError)
+            setPartnerProfile(null)
+            return
+        }
+
+        setPartnerProfile(profile)
+
+        // Fetch partner income for the selected month
+        const { data: pIncome, error: iError } = await supabase
+            .from('transactions')
+            .select('amount')
+            .eq('owner_id', profile.id)
+            .eq('type', 'income')
+            .like('date', `${selectedMonth}%`)
+
+        if (iError) {
+            console.error('Error fetching partner income:', iError)
+        } else {
+            const total = pIncome.reduce((acc, tx) => acc + Number(tx.amount), 0)
+            setPartnerIncome(total)
+        }
+    }
+
+    const updatePartnerEmail = async (email: string) => {
+        if (!currentUser) return
+        const { error } = await supabase
+            .from('profiles')
+            .update({ partner_email: email })
+            .eq('id', currentUser.id)
+
+        if (error) alert('Erro ao atualizar: ' + error.message)
+        else fetchProfile(currentUser.id)
+    }
+
+    const fetchTransactions = async () => {
+        const { data, error } = await supabase.from('transactions').select('*').order('date', { ascending: false })
+        if (error) console.error('Error fetching transactions:', error)
+        else setTransactions(data || [])
+    }
+
+    const fetchCategories = async () => {
+        const { data, error } = await supabase.from('categories').select('name')
+        if (error) console.error('Error fetching categories:', error)
+        else setCategories((data || []).map(c => c.name))
+    }
 
     // Form State
     const [isExpense, setIsExpense] = useState(true)
@@ -21,47 +135,55 @@ function App() {
         isCreditCard: false,
         installments: '1',
         startDate: new Date().toISOString().split('T')[0],
-        expenseType: 'variable', // fixed or variable
+        expenseType: 'variable',
     })
 
-    const users = [
-        { id: 'leo', name: 'Leonardo', color: 'var(--accent-primary)', avatar: 'L' },
-        { id: 'cris', name: 'Cristiane', color: 'var(--accent-secondary)', avatar: 'C' }
-    ]
-
-    const handleAddCategory = () => {
+    const handleAddCategory = async () => {
         if (newCategoryName && !categories.includes(newCategoryName)) {
-            setCategories([...categories, newCategoryName])
-            setFormData({ ...formData, category: newCategoryName })
-            setNewCategoryName('')
-            setShowNewCategoryInput(false)
+            const { error } = await supabase.from('categories').insert([{ name: newCategoryName }])
+            if (error) alert('Erro ao adicionar categoria: ' + error.message)
+            else {
+                setCategories([...categories, newCategoryName])
+                setFormData({ ...formData, category: newCategoryName })
+                setNewCategoryName('')
+                setShowNewCategoryInput(false)
+            }
         }
     }
 
-    const handleSubmit = (e: React.FormEvent) => {
+    const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault()
-
-        if (editingId) {
-            setTransactions(transactions.map(tx =>
-                tx.id === editingId
-                    ? { ...formData, id: tx.id, type: isExpense ? 'expense' : 'income', ownerId: tx.ownerId, scope: isShared ? 'SHARED' : 'PRIVATE' }
-                    : tx
-            ))
-            setEditingId(null)
-            alert('Transação atualizada com sucesso!')
-        } else {
-            const newTx = {
-                ...formData,
-                id: Date.now(),
-                type: isExpense ? 'expense' : 'income',
-                ownerId: currentUser.id,
-                scope: isShared ? 'SHARED' : 'PRIVATE'
-            }
-            setTransactions([newTx, ...transactions])
-            alert('Transação adicionada com sucesso!')
+        const txData: any = {
+            amount: Number(formData.amount),
+            category: formData.category,
+            date: formData.date,
+            type: isExpense ? 'expense' : 'income',
+            scope: isShared ? 'SHARED' : 'PRIVATE',
+            owner_id: currentUser.id,
+            expense_type: isExpense ? formData.expenseType : null,
+            is_credit_card: isExpense ? formData.isCreditCard : false,
+            installments: (isExpense && formData.isCreditCard) ? Number(formData.installments) : 1,
+            start_date: (isExpense && formData.isCreditCard) ? formData.startDate : formData.date,
         }
 
-        // Reset form
+        if (editingId) {
+            const { error } = await supabase.from('transactions').update(txData).eq('id', editingId)
+            if (error) alert('Erro ao atualizar: ' + error.message)
+            else {
+                setEditingId(null)
+                alert('Transação atualizada com sucesso!')
+                fetchTransactions()
+            }
+        } else {
+            const { error } = await supabase.from('transactions').insert([txData])
+            if (error) alert('Erro ao salvar: ' + error.message)
+            else {
+                alert('Transação adicionada com sucesso!')
+                fetchTransactions()
+            }
+        }
+
+        // Reset
         setFormData({
             amount: '',
             category: '',
@@ -73,9 +195,11 @@ function App() {
         })
     }
 
-    const handleDelete = (id: number) => {
+    const handleDelete = async (id: number) => {
         if (window.confirm('Tem certeza que deseja excluir esta transação?')) {
-            setTransactions(transactions.filter(tx => tx.id !== id))
+            const { error } = await supabase.from('transactions').delete().eq('id', id)
+            if (error) alert('Erro ao excluir: ' + error.message)
+            else fetchTransactions()
         }
     }
 
@@ -84,863 +208,302 @@ function App() {
         setIsExpense(tx.type === 'expense')
         setIsShared(tx.scope === 'SHARED')
         setFormData({
-            amount: tx.amount,
+            amount: tx.amount.toString(),
             category: tx.category,
             date: tx.date,
-            isCreditCard: tx.isCreditCard || false,
-            installments: tx.installments || '1',
-            startDate: tx.startDate || tx.date,
-            expenseType: tx.expenseType || 'variable',
+            isCreditCard: tx.is_credit_card || false,
+            installments: tx.installments?.toString() || '1',
+            startDate: tx.start_date || tx.date,
+            expenseType: tx.expense_type || 'variable',
         })
         window.scrollTo({ top: 0, behavior: 'smooth' })
     }
 
-    const cancelEdit = () => {
-        setEditingId(null)
-        setFormData({
-            amount: '',
-            category: '',
-            date: new Date().toISOString().split('T')[0],
-            isCreditCard: false,
-            installments: '1',
-            startDate: new Date().toISOString().split('T')[0],
-            expenseType: 'variable',
-        })
-    }
-
     const formatCurrency = (value: number) => {
-        return new Intl.NumberFormat('pt-BR', {
-            style: 'currency',
-            currency: 'BRL',
-        }).format(value)
+        return new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(value)
     }
 
-    if (!currentUser) {
+    const monthName = (m: string) => {
+        if (!m || typeof m !== 'string' || !m.includes('-')) return m
+        const [year, month] = m.split('-')
+        return new Date(Number(year), Number(month) - 1).toLocaleString('pt-BR', { month: 'short' })
+    }
+
+    if (loading) {
         return (
-            <div className="auth-screen animate-fade-in">
-                <div className="auth-card glass-panel">
-                    <BrainCircuit className="logo-icon large" />
-                    <h1>Bem-vindo ao EquiFinance IA</h1>
-                    <p>Selecione seu perfil para entrar</p>
-                    <div className="user-selector">
-                        {users.map(user => (
-                            <div
-                                key={user.id}
-                                className="user-pill"
-                                style={{ '--user-color': user.color } as any}
-                                onClick={() => setCurrentUser(user)}
-                            >
-                                <div className="avatar">{user.avatar}</div>
-                                <span>{user.name}</span>
-                            </div>
-                        ))}
-                    </div>
+            <div style={{
+                height: '100vh',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                color: 'white',
+                background: '#0d0d12'
+            }}>
+                <div style={{ textAlign: 'center' }}>
+                    <BrainCircuit className="logo-icon large pulse" style={{ margin: '0 auto 20px', display: 'block' }} />
+                    <p>Carregando seu Copilot...</p>
                 </div>
-                <style>{`
-          .auth-screen {
-            height: 100vh;
-            width: 100vw;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            background: radial-gradient(circle at center, #1a1a2e 0%, #0d0d12 100%);
-          }
-          .auth-card {
-            padding: 48px;
-            text-align: center;
-            display: flex;
-            flex-direction: column;
-            gap: 24px;
-            max-width: 400px;
-          }
-          .logo-icon.large { width: 64px; height: 64px; margin: 0 auto; color: var(--accent-primary); }
-          .user-selector { display: flex; gap: 20px; margin-top: 12px; }
-          .user-pill {
-            flex: 1;
-            padding: 24px;
-            background: rgba(255,255,255,0.03);
-            border: 1px solid var(--border-color);
-            border-radius: 16px;
-            cursor: pointer;
-            transition: all 0.3s;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            gap: 12px;
-          }
-          .user-pill:hover {
-            border-color: var(--user-color);
-            background: rgba(255,255,255,0.06);
-            transform: translateY(-5px);
-          }
-          .avatar {
-            width: 50px;
-            height: 50px;
-            border-radius: 50%;
-            background: var(--user-color);
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-weight: 700;
-            font-size: 1.2rem;
-            color: white;
-          }
-        `}</style>
             </div>
         )
     }
 
-    const visibleTransactions = transactions.filter(tx =>
-        tx.scope === 'SHARED' || tx.ownerId === currentUser.id
-    )
+    if (!session || !currentUser) {
+        return (
+            <div className="auth-screen animate-fade-in">
+                <div className="auth-card glass-panel">
+                    <BrainCircuit className="logo-icon large" />
+                    <h1>EquiFinance IA</h1>
+                    <p>Entre ou crie sua conta para começar</p>
+                    <form className="auth-form" onSubmit={async (e) => {
+                        e.preventDefault()
+                        const target = e.target as any
+                        const email = target.email.value
+                        const password = target.password.value
+                        const name = target.name?.value
+                        const isSignUp = target.submit.value === 'signup'
 
-    const sharedExpenses = transactions.filter(tx => tx.scope === 'SHARED' && tx.type === 'expense')
-    const totalShared = sharedExpenses.reduce((acc, tx) => acc + Number(tx.amount), 0)
-    const leoShared = sharedExpenses.filter(tx => tx.ownerId === 'leo').reduce((acc, tx) => acc + Number(tx.amount), 0)
-    const crisShared = sharedExpenses.filter(tx => tx.ownerId === 'cris').reduce((acc, tx) => acc + Number(tx.amount), 0)
+                        if (isSignUp) {
+                            const { error } = await supabase.auth.signUp({
+                                email, password,
+                                options: { data: { name: name || email.split('@')[0], avatar_url: '?', color: 'var(--accent-primary)' } }
+                            })
+                            if (error) alert(error.message)
+                            else alert('Verifique seu e-mail para confirmar o cadastro!')
+                        } else {
+                            const { error } = await supabase.auth.signInWithPassword({ email, password })
+                            if (error) alert(error.message)
+                        }
+                    }}>
+                        <div className="form-group">
+                            <label>E-mail</label>
+                            <input name="email" type="email" required placeholder="seu@email.com" />
+                        </div>
+                        <div className="form-group">
+                            <label>Senha</label>
+                            <input name="password" type="password" required placeholder="••••••••" />
+                        </div>
+                        <div className="form-actions-column">
+                            <button type="submit" name="submit" value="signin" className="btn-save">Entrar</button>
+                            <div className="form-group signup-extra">
+                                <label>Nome (apenas para cadastro)</label>
+                                <input name="name" type="text" placeholder="Seu nome" />
+                                <button type="submit" name="submit" value="signup" className="btn-cancel">Cadastrar</button>
+                            </div>
+                            <button
+                                type="button"
+                                className="btn-demo"
+                                style={{
+                                    marginTop: '24px',
+                                    background: 'transparent',
+                                    border: '1px dashed var(--accent-secondary)',
+                                    color: 'var(--accent-secondary)',
+                                    padding: '12px',
+                                    borderRadius: '10px',
+                                    cursor: 'pointer',
+                                    fontSize: '0.9rem'
+                                }}
+                                onClick={() => {
+                                    const mockUser = {
+                                        id: '123',
+                                        name: 'Visitante',
+                                        email: 'visitante@example.com',
+                                        avatar_url: '?',
+                                        color: 'var(--accent-primary)',
+                                        partner_email: 'parceiro@demo.com'
+                                    };
+                                    setSession({ user: mockUser });
+                                    setCurrentUser(mockUser);
+                                    setPartnerProfile({
+                                        id: '456',
+                                        name: 'Parceiro Demo',
+                                        email: 'parceiro@demo.com',
+                                        color: 'var(--accent-secondary)'
+                                    });
+                                    setPartnerIncome(4000);
+                                    setTransactions([
+                                        { id: 1, amount: 200, category: 'Mercado', date: new Date().toISOString().slice(0, 10), type: 'expense', scope: 'SHARED', owner_id: '123' },
+                                        { id: 2, amount: 5000, category: 'Salário', date: new Date().toISOString().slice(0, 10), type: 'income', scope: 'PRIVATE', owner_id: '123' }
+                                    ]);
+                                    setLoading(false);
+                                }}
+                            >
+                                Entrar como Convidado (Demo)
+                            </button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        )
+    }
 
-    const leoPercent = totalShared > 0 ? (leoShared / totalShared) * 100 : 50
-    const crisPercent = totalShared > 0 ? (crisShared / totalShared) * 100 : 50
+    // Derived State for Shared Logic
+    const currentMonthTxs = transactions.filter(tx => tx.date.startsWith(selectedMonth))
+    const currentMonthShared = currentMonthTxs.filter(tx => tx.scope === 'SHARED' && tx.type === 'expense')
+    const currentMonthTotal = currentMonthShared.reduce((acc, tx) => acc + Number(tx.amount), 0)
+    const myCurrentMonthShared = currentMonthShared.filter(tx => tx.owner_id === currentUser.id).reduce((acc, tx) => acc + Number(tx.amount), 0)
+    const mMinePercent = currentMonthTotal > 0 ? (myCurrentMonthShared / currentMonthTotal) * 100 : 50
+    const mOthersPercent = 100 - mMinePercent
 
-    // Monthly Data Logic
-    const getMonthlyStats = () => {
-        const stats: Record<string, { shared: number, leo: number, cris: number }> = {}
+    const totalSharedAllTime = transactions.filter(tx => tx.scope === 'SHARED' && tx.type === 'expense').reduce((acc, tx) => acc + Number(tx.amount), 0)
+
+    const monthlyStats = (() => {
+        const stats: Record<string, { shared: number, mine: number, others: number }> = {}
         transactions.forEach(tx => {
+            if (!tx.date) return
             const m = tx.date.slice(0, 7)
-            if (!stats[m]) stats[m] = { shared: 0, leo: 0, cris: 0 }
-
+            if (!stats[m]) stats[m] = { shared: 0, mine: 0, others: 0 }
             if (tx.type === 'expense') {
                 if (tx.scope === 'SHARED') stats[m].shared += Number(tx.amount)
-                else if (tx.ownerId === 'leo') stats[m].leo += Number(tx.amount)
-                else if (tx.ownerId === 'cris') stats[m].cris += Number(tx.amount)
+                else if (tx.owner_id === currentUser.id) stats[m].mine += Number(tx.amount)
+                else stats[m].others += Number(tx.amount)
             }
         })
         return stats
-    }
+    })()
 
-    const monthlyStats = getMonthlyStats()
     const last3Months = Array.from({ length: 3 }, (_, i) => {
         const d = new Date()
         d.setMonth(d.getMonth() - i)
         return d.toISOString().slice(0, 7)
     }).reverse()
 
-    const currentMonthTxs = transactions.filter(tx => tx.date.startsWith(selectedMonth))
+    const myIncomeActual = currentMonthTxs.filter(tx => tx.type === 'income' && tx.owner_id === currentUser.id).reduce((acc, tx) => acc + Number(tx.amount), 0)
+    const coupleTotalIncome = myIncomeActual + partnerIncome
 
-    // Income Calculations (Visible to both)
-    const leoIncome = transactions
-        .filter(tx => tx.type === 'income' && tx.ownerId === 'leo' && tx.date.startsWith(selectedMonth))
-        .reduce((acc, tx) => acc + Number(tx.amount), 0)
+    // Real suggested percents based on income
+    const suggestedMinePercent = coupleTotalIncome > 0 ? (myIncomeActual / coupleTotalIncome) * 100 : 50
+    const suggestedPartnerPercent = 100 - suggestedMinePercent
 
-    const crisIncome = transactions
-        .filter(tx => tx.type === 'income' && tx.ownerId === 'cris' && tx.date.startsWith(selectedMonth))
-        .reduce((acc, tx) => acc + Number(tx.amount), 0)
+    const currentMonthFixed = currentMonthTxs.filter(tx => tx.type === 'expense' && tx.expense_type === 'fixed').reduce((acc, tx) => acc + Number(tx.amount), 0)
+    const currentMonthVariable = currentMonthTxs.filter(tx => tx.type === 'expense' && (tx.expense_type === 'variable' || !tx.expense_type)).reduce((acc, tx) => acc + Number(tx.amount), 0)
 
-    const coupleTotalIncome = leoIncome + crisIncome
+    const myPrivateExpenses = currentMonthTxs.filter(tx => tx.type === 'expense' && tx.scope === 'PRIVATE' && tx.owner_id === currentUser.id).reduce((acc, tx) => acc + Number(tx.amount), 0)
+    const mySharedShare = (currentMonthTotal * suggestedMinePercent) / 100
+    const myAvailable = myIncomeActual - myPrivateExpenses - mySharedShare
 
-    // Dynamic split based on income
-    const suggestedLeoPercent = coupleTotalIncome > 0 ? (leoIncome / coupleTotalIncome) * 100 : 50
-    const suggestedCrisPercent = coupleTotalIncome > 0 ? (crisIncome / coupleTotalIncome) * 100 : 50
-
-    const currentMonthShared = currentMonthTxs.filter(tx => tx.scope === 'SHARED' && tx.type === 'expense')
-    const currentMonthTotal = currentMonthShared.reduce((acc, tx) => acc + Number(tx.amount), 0)
-    const currentMonthLeo = currentMonthShared.filter(tx => tx.ownerId === 'leo').reduce((acc, tx) => acc + Number(tx.amount), 0)
-    const currentMonthCris = currentMonthShared.filter(tx => tx.ownerId === 'cris').reduce((acc, tx) => acc + Number(tx.amount), 0)
-
-    const mLeoPercent = currentMonthTotal > 0 ? (currentMonthLeo / currentMonthTotal) * 100 : 50
-    const mCrisPercent = currentMonthTotal > 0 ? (currentMonthCris / currentMonthTotal) * 100 : 50
-
-    // Personal Budget Calculations
-    const myIncome = currentMonthTxs
-        .filter(tx => tx.type === 'income' && tx.ownerId === currentUser.id)
-        .reduce((acc, tx) => acc + Number(tx.amount), 0)
-
-    const myPrivateExpenses = currentMonthTxs
-        .filter(tx => tx.type === 'expense' && tx.scope === 'PRIVATE' && tx.ownerId === currentUser.id)
-        .reduce((acc, tx) => acc + Number(tx.amount), 0)
-
-    // My share of the shared expenses (based on current month total shared and suggested split)
-    const mySharedShare = (currentMonthTotal * (currentUser.id === 'leo' ? suggestedLeoPercent : suggestedCrisPercent)) / 100
-    const myAvailable = myIncome - myPrivateExpenses - mySharedShare
-
-    const currentMonthFixed = currentMonthTxs.filter(tx => tx.type === 'expense' && tx.expenseType === 'fixed').reduce((acc, tx) => acc + Number(tx.amount), 0)
-    const currentMonthVariable = currentMonthTxs.filter(tx => tx.type === 'expense' && (tx.expenseType === 'variable' || !tx.expenseType)).reduce((acc, tx) => acc + Number(tx.amount), 0)
     const fixedPercent = (currentMonthFixed + currentMonthVariable) > 0 ? (currentMonthFixed / (currentMonthFixed + currentMonthVariable)) * 100 : 0
-    const variablePercent = (currentMonthFixed + currentMonthVariable) > 0 ? (currentMonthVariable / (currentMonthFixed + currentMonthVariable)) * 100 : 0
+    const variablePercent = 100 - fixedPercent
 
-    const monthName = (m: string) => {
-        const [year, month] = m.split('-')
-        return new Date(Number(year), Number(month) - 1).toLocaleString('pt-BR', { month: 'short' })
-    }
-
-    const totalSharedAllTime = transactions
-        .filter(tx => tx.scope === 'SHARED' && tx.type === 'expense')
-        .reduce((acc, tx) => acc + Number(tx.amount), 0)
-
-    const getForecastData = () => {
+    const forecastData = (() => {
         const forecast = []
         const now = new Date()
-
         for (let i = 0; i < 12; i++) {
             const d = new Date(now.getFullYear(), now.getMonth() + i, 1)
-            const monthStr = d.toISOString().slice(0, 7) // YYYY-MM
-
-            let fixed = 0
-            let variable = 0
-            let income = 0
+            const monthStr = d.toISOString().slice(0, 7)
+            let fixed = 0, variable = 0, income = 0
 
             transactions.forEach(tx => {
                 const amount = Number(tx.amount)
-                if (tx.scope !== 'SHARED') return // Forecast for Couple
-
-                if (tx.type === 'income') {
-                    // For now, assume income is monthly if added in the current or previous month
-                    // Or just count income added for that specific future month (if any)
-                    if (tx.date.startsWith(monthStr)) income += amount
-                } else {
-                    if (tx.expenseType === 'fixed') {
-                        fixed += amount
-                    } else if (tx.isCreditCard) {
+                if (tx.scope !== 'SHARED') return
+                if (tx.type === 'income') { if (tx.date.startsWith(monthStr)) income += amount }
+                else {
+                    if (tx.expense_type === 'fixed') fixed += amount
+                    else if (tx.is_credit_card) {
                         const installments = Number(tx.installments) || 1
-                        const startDate = new Date(tx.startDate)
+                        const startDate = new Date(tx.start_date || tx.date)
                         const startMonth = new Date(startDate.getFullYear(), startDate.getMonth(), 1)
-                        const currentForecastMonth = new Date(d.getFullYear(), d.getMonth(), 1)
-
-                        const diffMonths = (currentForecastMonth.getFullYear() - startMonth.getFullYear()) * 12 + (currentForecastMonth.getMonth() - startMonth.getMonth())
-
-                        if (diffMonths >= 0 && diffMonths < installments) {
-                            variable += amount / installments
-                        }
-                    } else {
-                        // Regular variable expenses only count for their specific month
-                        if (tx.date.startsWith(monthStr)) variable += amount
-                    }
+                        const diffMonths = (d.getFullYear() - startMonth.getFullYear()) * 12 + (d.getMonth() - startMonth.getMonth())
+                        if (diffMonths >= 0 && diffMonths < installments) variable += amount / installments
+                    } else { if (tx.date.startsWith(monthStr)) variable += amount }
                 }
             })
-
-            forecast.push({
-                month: monthStr,
-                fixed,
-                variable,
-                total: fixed + variable,
-                income
-            })
+            forecast.push({ month: monthStr, fixed, variable, total: fixed + variable, income })
         }
         return forecast
-    }
+    })()
 
-    const forecastData = getForecastData()
+    const visibleTransactions = transactions.filter(tx => tx.scope === 'SHARED' || tx.owner_id === currentUser.id)
 
     return (
         <div className="layout-root">
-            {/* Sidebar */}
-            <nav className="sidebar glass-panel">
-                <div className="logo">
-                    <BrainCircuit className="logo-icon" />
-                    <span>EquiFinance IA</span>
-                </div>
-                <div className="nav-items">
-                    <NavItem icon={<LayoutDashboard />} label="Dashboard" active={activeTab === 'dashboard'} onClick={() => setActiveTab('dashboard')} />
-                    <NavItem icon={<Users />} label="Casal" active={activeTab === 'couple'} onClick={() => setActiveTab('couple')} />
-                    <NavItem icon={<Wallet />} label="Transações" active={activeTab === 'transactions'} onClick={() => setActiveTab('transactions')} />
-                    <NavItem icon={<TrendingUp />} label="Simulador" active={activeTab === 'simulator'} onClick={() => setActiveTab('simulator')} />
-                </div>
-                <div className="nav-footer">
-                    <div className="current-profile" onClick={() => setCurrentUser(null)}>
-                        <div className="avatar mini" style={{ background: currentUser.color }}>{currentUser.avatar}</div>
-                        <div className="profile-info">
-                            <span>{currentUser.name}</span>
-                            <p>Sair</p>
-                        </div>
-                    </div>
-                    <NavItem icon={<Settings />} label="Configurações" />
-                </div>
-            </nav>
+            <Sidebar
+                currentUser={currentUser}
+                activeTab={activeTab}
+                setActiveTab={setActiveTab}
+                onLogout={() => supabase.auth.signOut()}
+            />
 
-            {/* Main Content */}
             <main className="content">
                 <header className="header">
-                    <h1>{activeTab === 'dashboard' ? `Olá, ${currentUser.name}` : 'Gerenciar Transações'}</h1>
+                    <h1>{activeTab === 'dashboard' ? `Olá, ${currentUser.name}` :
+                        activeTab === 'couple' ? 'Visão do Casal' :
+                            activeTab === 'transactions' ? 'Gerenciar Transações' : 'Simulador IA'}</h1>
                     <div className="ai-status">
                         <span className="pulse"></span> Copilot Ativo
                     </div>
                 </header>
 
-                {activeTab === 'dashboard' ? (
-                    <section className="dashboard-grid">
-                        {/* Shared Equity Card */}
-                        <div className="card glass-panel animate-fade-in" style={{ gridColumn: 'span 2' }}>
-                            <div className="card-header">
-                                <div className="title-stack">
-                                    <h2>Equidade de Gastos Compartilhada</h2>
-                                    <select
-                                        className="month-select"
-                                        value={selectedMonth}
-                                        onChange={(e) => setSelectedMonth(e.target.value)}
-                                    >
-                                        {[...new Set([selectedMonth, ...Object.keys(monthlyStats)])].sort().reverse().map(m => (
-                                            <option key={m} value={m}>{monthName(m)} / {m.split('-')[0]}</option>
-                                        ))}
-                                    </select>
-                                </div>
-                                <span className="badge">Mês: {formatCurrency(currentMonthTotal)}</span>
-                            </div>
-                            <div className="equity-visualizer">
-                                <div className="equity-bar">
-                                    <div className="equity-fill p1" style={{ width: `${mLeoPercent}%`, background: 'var(--accent-primary)' }}>
-                                        <span className="label">Leo ({mLeoPercent.toFixed(0)}%)</span>
-                                    </div>
-                                    <div className="equity-fill p2" style={{ width: `${mCrisPercent}%`, background: 'var(--accent-secondary)' }}>
-                                        <span className="label">Cris ({mCrisPercent.toFixed(0)}%)</span>
-                                    </div>
-                                </div>
-                                <p className="description">
-                                    Total acumulado (todos os meses): {formatCurrency(totalSharedAllTime)}
-                                </p>
-                            </div>
-                        </div>
+                {activeTab === 'dashboard' && (
+                    <Dashboard
+                        currentUser={currentUser}
+                        selectedMonth={selectedMonth}
+                        setSelectedMonth={setSelectedMonth}
+                        monthlyStats={monthlyStats}
+                        formatCurrency={formatCurrency}
+                        monthName={monthName}
+                        totalSharedAllTime={totalSharedAllTime}
+                        last3Months={last3Months}
+                        coupleTotalIncome={coupleTotalIncome}
+                        currentMonthTotal={currentMonthTotal}
+                        currentMonthFixed={currentMonthFixed}
+                        currentMonthVariable={currentMonthVariable}
+                        fixedPercent={fixedPercent}
+                        variablePercent={variablePercent}
+                        myIncomeActual={myIncomeActual}
+                        myAvailable={myAvailable}
+                        mMinePercent={mMinePercent}
+                        mOthersPercent={mOthersPercent}
+                        suggestedMinePercent={suggestedMinePercent}
+                        suggestedPartnerPercent={suggestedPartnerPercent}
+                    />
+                )}
 
-                        {/* Comparative Monthly Chart */}
-                        <div className="card glass-panel animate-fade-in" style={{ gridColumn: 'span 1' }}>
-                            <div className="card-header">
-                                <h2>Histórico Comparativo</h2>
-                                <TrendingUp className="status-icon" size={16} />
-                            </div>
-                            <div className="chart-container multi-bar">
-                                {(() => {
-                                    const allVals = last3Months.flatMap(m => {
-                                        const s = monthlyStats[m] || { shared: 0, leo: 0, cris: 0 }
-                                        return [s.shared, s.leo, s.cris]
-                                    })
-                                    const maxVal = Math.max(...allVals, 1)
+                {activeTab === 'couple' && (
+                    <CoupleView
+                        currentUser={currentUser}
+                        partnerProfile={partnerProfile}
+                        onUpdatePartnerEmail={updatePartnerEmail}
+                        coupleTotalIncome={coupleTotalIncome}
+                        suggestedLeoPercent={suggestedMinePercent}
+                        suggestedCrisPercent={suggestedPartnerPercent}
+                        forecastData={forecastData}
+                        formatCurrency={formatCurrency}
+                        monthName={monthName}
+                    />
+                )}
 
-                                    return last3Months.map(m => {
-                                        const s = monthlyStats[m] || { shared: 0, leo: 0, cris: 0 }
-                                        return (
-                                            <div key={m} className="chart-bar-group">
-                                                <div className="bar-trio">
-                                                    <div className="bar-wrapper mini" title={`Leo Privado: ${formatCurrency(s.leo)}`}>
-                                                        <div className="chart-bar leo-v" style={{ height: `${(s.leo / maxVal) * 100}%` }}></div>
-                                                    </div>
-                                                    <div className="bar-wrapper mini" title={`Cris Privada: ${formatCurrency(s.cris)}`}>
-                                                        <div className="chart-bar cris-v" style={{ height: `${(s.cris / maxVal) * 100}%` }}></div>
-                                                    </div>
-                                                    <div className="bar-wrapper mini" title={`Compartilhado: ${formatCurrency(s.shared)}`}>
-                                                        <div className="chart-bar shared-v" style={{ height: `${(s.shared / maxVal) * 100}%` }}></div>
-                                                    </div>
-                                                </div>
-                                                <span className="bar-label">{monthName(m)}</span>
-                                            </div>
-                                        )
-                                    })
-                                })()}
-                            </div>
-                            <div className="chart-legend">
-                                <span className="leg-item"><i className="dot leo"></i> Leo</span>
-                                <span className="leg-item"><i className="dot cris"></i> Cris</span>
-                                <span className="leg-item"><i className="dot shared"></i> Casal</span>
-                            </div>
-                        </div>
+                {activeTab === 'transactions' && (
+                    <TransactionsView
+                        isExpense={isExpense}
+                        setIsExpense={setIsExpense}
+                        isShared={isShared}
+                        setIsShared={setIsShared}
+                        formData={formData}
+                        setFormData={setFormData}
+                        categories={categories}
+                        showNewCategoryInput={showNewCategoryInput}
+                        setShowNewCategoryInput={setShowNewCategoryInput}
+                        newCategoryName={newCategoryName}
+                        setNewCategoryName={setNewCategoryName}
+                        handleAddCategory={handleAddCategory}
+                        handleSubmit={handleSubmit}
+                        editingId={editingId}
+                        cancelEdit={() => setEditingId(null)}
+                        visibleTransactions={visibleTransactions}
+                        handleEdit={handleEdit}
+                        handleDelete={handleDelete}
+                        formatCurrency={formatCurrency}
+                        currentUser={currentUser}
+                    />
+                )}
 
-                        {/* Shared Gains Card */}
-                        <div className="card glass-panel ai-card animate-fade-in">
-                            <div className="card-header">
-                                <div className="title-with-icon">
-                                    <TrendingUp className="accent-icon" />
-                                    <h2>Renda Total do Casal</h2>
-                                </div>
-                            </div>
-                            <div className="balance-info">
-                                <span className="amount">{formatCurrency(coupleTotalIncome)}</span>
-                                <span className="subtitle">Soma de rendas (visível aos dois)</span>
-                            </div>
-                        </div>
-
-                        {/* Fixed vs Variable Breakdown Card */}
-                        <div className="card glass-panel animate-fade-in" style={{ gridColumn: 'span 1' }}>
-                            <div className="card-header">
-                                <h2>Distribuição de Gastos</h2>
-                                <BrainCircuit className="status-icon" size={16} />
-                            </div>
-                            <div className="breakdown-stats">
-                                <div className="stat-item">
-                                    <span className="dot fixed"></span>
-                                    <div className="stat-info">
-                                        <p>Fixos: {formatCurrency(currentMonthFixed)}</p>
-                                        <div className="mini-progress"><div className="fill fixed" style={{ width: `${fixedPercent}%` }}></div></div>
-                                    </div>
-                                </div>
-                                <div className="stat-item">
-                                    <span className="dot variable"></span>
-                                    <div className="stat-info">
-                                        <p>Variáveis: {formatCurrency(currentMonthVariable)}</p>
-                                        <div className="mini-progress"><div className="fill variable" style={{ width: `${variablePercent}%` }}></div></div>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-
-                        {/* Personal Budget Card */}
-                        <div className="card glass-panel animate-fade-in">
-                            <div className="card-header">
-                                <h2>Seu Orçamento ({currentUser.name})</h2>
-                                <ShieldAlert className="privacy-icon" />
-                            </div>
-                            <div className="balance-info">
-                                <div className="income-split">
-                                    <div>
-                                        <p className="subtitle">Seus Ganhos</p>
-                                        <span className="amount small">{formatCurrency(myIncome)}</span>
-                                    </div>
-                                    <div>
-                                        <p className="subtitle">Disponível</p>
-                                        <span className="amount small">{formatCurrency(myAvailable)}</span>
-                                    </div>
-                                </div>
-                                <span className="subtitle mt-12">Somente você vê seus detalhes privados</span>
-                            </div>
-                        </div>
-                    </section>
-                ) : activeTab === 'couple' ? (
-                    <section className="couple-view animate-fade-in">
-                        <div className="card glass-panel" style={{ marginBottom: '24px' }}>
-                            <div className="card-header">
-                                <h2>Equidade & Configurações</h2>
-                                <Users className="accent-icon" />
-                            </div>
-                            <div className="equity-details">
-                                <p>A divisão sugerida pela IA baseada na renda total de {formatCurrency(coupleTotalIncome)} é de {suggestedLeoPercent.toFixed(0)}% para Leonardo e {suggestedCrisPercent.toFixed(0)}% para Cristiane.</p>
-                                <div className="equity-visualizer" style={{ marginTop: '20px' }}>
-                                    <div className="equity-bar">
-                                        <div className="equity-fill p1" style={{ width: `${suggestedLeoPercent}%`, background: 'var(--accent-primary)' }}>
-                                            <span className="label">Leo ({suggestedLeoPercent.toFixed(0)}%)</span>
-                                        </div>
-                                        <div className="equity-fill p2" style={{ width: `${suggestedCrisPercent}%`, background: 'var(--accent-secondary)' }}>
-                                            <span className="label">Cris ({suggestedCrisPercent.toFixed(0)}%)</span>
-                                        </div>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-
-                        <div className="card glass-panel animate-fade-in">
-                            <div className="card-header">
-                                <div className="title-stack">
-                                    <h2>Previsão de Gastos Compartilhados (12 Meses)</h2>
-                                    <p className="subtitle">Visão antecipada para planejamento familiar</p>
-                                </div>
-                                <TrendingUp className="accent-icon" />
-                            </div>
-
-                            <div className="forecast-table-container">
-                                <table className="forecast-table">
-                                    <thead>
-                                        <tr>
-                                            <th>Mês</th>
-                                            <th>Fixos</th>
-                                            <th>Variáveis/Parcelas</th>
-                                            <th>Total Previsto</th>
-                                            <th>Status</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody>
-                                        {forecastData.map(item => {
-                                            const isOver = item.income > 0 && item.total > item.income
-                                            return (
-                                                <tr key={item.month}>
-                                                    <td className="month-name">{monthName(item.month)} {item.month.split('-')[0]}</td>
-                                                    <td>{formatCurrency(item.fixed)}</td>
-                                                    <td>{formatCurrency(item.variable)}</td>
-                                                    <td className="total-cell">{formatCurrency(item.total)}</td>
-                                                    <td>
-                                                        {item.income > 0 ? (
-                                                            <span className={`status-pill ${isOver ? 'danger' : 'success'}`}>
-                                                                {isOver ? 'Déficit' : 'OK'}
-                                                            </span>
-                                                        ) : (
-                                                            <span className="status-pill neutral">Sem Renda Info</span>
-                                                        )}
-                                                    </td>
-                                                </tr>
-                                            )
-                                        })}
-                                    </tbody>
-                                </table>
-                            </div>
-                        </div>
-                    </section>
-                ) : (
-                    <section className="transactions-view animate-fade-in">
-                        <div className="form-container glass-panel">
-                            <div className="form-toggle">
-                                <button
-                                    className={isExpense ? 'active' : ''}
-                                    onClick={() => setIsExpense(true)}
-                                >Gasto</button>
-                                <button
-                                    className={!isExpense ? 'active' : ''}
-                                    onClick={() => setIsExpense(false)}
-                                >Ganho</button>
-                            </div>
-
-                            <form onSubmit={handleSubmit} className="transaction-form">
-                                <div className="form-group">
-                                    <label>Valor</label>
-                                    <input
-                                        type="number"
-                                        placeholder="R$ 0,00"
-                                        value={formData.amount}
-                                        onChange={(e) => setFormData({ ...formData, amount: e.target.value })}
-                                        required
-                                    />
-                                </div>
-
-                                <div className="form-group">
-                                    <label>Categoria</label>
-                                    <div className="select-with-add">
-                                        <select
-                                            value={formData.category}
-                                            onChange={(e) => setFormData({ ...formData, category: e.target.value })}
-                                            required
-                                        >
-                                            <option value="">Selecionar...</option>
-                                            {categories.map(cat => (
-                                                <option key={cat} value={cat}>{cat}</option>
-                                            ))}
-                                        </select>
-                                        <button type="button" onClick={() => setShowNewCategoryInput(!showNewCategoryInput)} className="btn-add-cat">+</button>
-                                    </div>
-                                    {showNewCategoryInput && (
-                                        <div className="new-cat-input">
-                                            <input
-                                                type="text"
-                                                placeholder="Nova categoria..."
-                                                value={newCategoryName}
-                                                onChange={(e) => setNewCategoryName(e.target.value)}
-                                            />
-                                            <button type="button" onClick={handleAddCategory}>OK</button>
-                                        </div>
-                                    )}
-                                </div>
-
-                                <div className="form-group">
-                                    <label>Data</label>
-                                    <input
-                                        type="date"
-                                        value={formData.date}
-                                        onChange={(e) => setFormData({ ...formData, date: e.target.value })}
-                                        required
-                                    />
-                                </div>
-
-                                <div className="form-group scope-toggle">
-                                    <label>Quem paga?</label>
-                                    <div className="toggle-container">
-                                        <button
-                                            type="button"
-                                            className={isShared ? 'active' : ''}
-                                            onClick={() => setIsShared(true)}
-                                        >Compartilhado (Casal)</button>
-                                        <button
-                                            type="button"
-                                            className={!isShared ? 'active' : ''}
-                                            onClick={() => setIsShared(false)}
-                                        >Privado (Só eu)</button>
-                                    </div>
-                                </div>
-
-                                {isExpense && (
-                                    <div className="form-group expense-type-toggle animate-fade-in">
-                                        <label>Tipo de Gasto</label>
-                                        <div className="toggle-container">
-                                            <button
-                                                type="button"
-                                                className={formData.expenseType === 'fixed' ? 'active' : ''}
-                                                onClick={() => setFormData({ ...formData, expenseType: 'fixed' })}
-                                            >Fixo</button>
-                                            <button
-                                                type="button"
-                                                className={formData.expenseType === 'variable' ? 'active' : ''}
-                                                onClick={() => setFormData({ ...formData, expenseType: 'variable' })}
-                                            >Variável</button>
-                                        </div>
-                                    </div>
-                                )}
-
-                                {isExpense && (
-                                    <>
-                                        <div className="form-group checkbox-group">
-                                            <label>
-                                                <input
-                                                    type="checkbox"
-                                                    checked={formData.isCreditCard}
-                                                    onChange={(e) => setFormData({ ...formData, isCreditCard: e.target.checked })}
-                                                /> Cartão de Crédito
-                                            </label>
-                                        </div>
-
-                                        {formData.isCreditCard && (
-                                            <div className="credit-details">
-                                                <div className="form-group">
-                                                    <label>Parcelas</label>
-                                                    <input
-                                                        type="number"
-                                                        min="1"
-                                                        max="48"
-                                                        value={formData.installments}
-                                                        onChange={(e) => setFormData({ ...formData, installments: e.target.value })}
-                                                    />
-                                                </div>
-                                                <div className="form-group">
-                                                    <label>Início do Gasto</label>
-                                                    <input
-                                                        type="date"
-                                                        value={formData.startDate}
-                                                        onChange={(e) => setFormData({ ...formData, startDate: e.target.value })}
-                                                    />
-                                                </div>
-                                            </div>
-                                        )}
-                                    </>
-                                )}
-
-                                <div className="form-actions-row">
-                                    <button type="submit" className="btn-save">
-                                        {editingId ? 'Atualizar Transação' : 'Salvar Transação'}
-                                    </button>
-                                    {editingId && (
-                                        <button type="button" className="btn-cancel" onClick={cancelEdit}>
-                                            <X size={16} /> Cancelar
-                                        </button>
-                                    )}
-                                </div>
-                            </form>
-                        </div>
-
-                        <div className="recent-list glass-panel">
-                            <div className="list-header-actions">
-                                <h3>Suas Transações & Compartilhadas</h3>
-                            </div>
-                            <div className="tx-list">
-                                {visibleTransactions.length === 0 ? (
-                                    <p className="empty-msg">Nenhuma transação registrada ainda.</p>
-                                ) : (
-                                    visibleTransactions.map(tx => (
-                                        <div key={tx.id} className={`tx-item ${tx.type}`}>
-                                            <div className="tx-main">
-                                                <div className="tx-header-row">
-                                                    <span className="tx-cat">{tx.category}</span>
-                                                    <span className={`tx-scope-tag ${tx.scope.toLowerCase()}`}>
-                                                        {tx.scope === 'SHARED' ? 'Casal' : 'Privado'}
-                                                    </span>
-                                                    {tx.type === 'expense' && (
-                                                        <span className={`tx-type-tag ${tx.expenseType || 'variable'}`}>
-                                                            {tx.expenseType === 'fixed' ? 'Fixo' : 'Variável'}
-                                                        </span>
-                                                    )}
-                                                </div>
-                                                <span className="tx-date">{tx.date} • {tx.ownerId === 'leo' ? 'Leo' : 'Cris'}</span>
-                                            </div>
-                                            <div className="tx-details">
-                                                <div className="tx-actions">
-                                                    <button className="action-btn edit" onClick={() => handleEdit(tx)} title="Editar">
-                                                        <Pencil size={14} />
-                                                    </button>
-                                                    <button className="action-btn delete" onClick={() => handleDelete(tx.id)} title="Excluir">
-                                                        <Trash2 size={14} />
-                                                    </button>
-                                                </div>
-                                                <span className="tx-amount">
-                                                    {tx.type === 'expense' ? '-' : '+'} {formatCurrency(Number(tx.amount))}
-                                                </span>
-                                                {tx.isCreditCard && (
-                                                    <span className="tx-card-info">{tx.installments}x no cartão</span>
-                                                )}
-                                            </div>
-                                        </div>
-                                    ))
-                                )}
-                            </div>
-                        </div>
-                    </section >
-                )
-                }
-            </main >
-
-            <style>{`
-        /* Previous Styles */
-        .layout-root { display: flex; width: 100%; padding: 24px; gap: 24px; }
-        .sidebar { width: 260px; display: flex; flex-direction: column; padding: 32px 16px; position: relative; }
-        .logo { display: flex; align-items: center; gap: 12px; font-weight: 700; font-size: 1.2rem; margin-bottom: 48px; color: var(--accent-primary); }
-        .logo-icon { width: 32px; height: 32px; }
-        .nav-items { flex: 1; display: flex; flex-direction: column; gap: 8px; }
-        .nav-item { display: flex; align-items: center; gap: 12px; padding: 12px 16px; border-radius: 12px; color: var(--text-secondary); cursor: pointer; transition: all 0.2s; }
-        .nav-item.active { background: rgba(255, 255, 255, 0.05); color: var(--text-primary); }
-        .nav-item:hover { background: rgba(255, 255, 255, 0.08); }
-        .content { flex: 1; display: flex; flex-direction: column; gap: 32px; }
-        .header { display: flex; justify-content: space-between; align-items: center; }
-        .ai-status { display: flex; align-items: center; gap: 8px; font-size: 0.9rem; color: var(--accent-secondary); background: rgba(139, 92, 246, 0.1); padding: 6px 12px; border-radius: 20px; }
-        .pulse { width: 8px; height: 8px; background: var(--accent-secondary); border-radius: 50%; box-shadow: 0 0 8px var(--accent-secondary); animation: pulse 2s infinite; }
-        @keyframes pulse { 0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(139, 92, 246, 0.7); } 70% { transform: scale(1); box-shadow: 0 0 0 10px rgba(139, 92, 246, 0); } 100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(139, 92, 246, 0); } }
-        .dashboard-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 24px; }
-        .card { padding: 24px; display: flex; flex-direction: column; gap: 20px; }
-        .card-header { display: flex; justify-content: space-between; align-items: flex-start; }
-        .card-header h2 { font-size: 1.1rem; font-weight: 500; }
-        .badge { font-size: 0.75rem; background: rgba(255,255,255,0.1); padding: 4px 8px; border-radius: 6px; }
-        .equity-visualizer { display: flex; flex-direction: column; gap: 16px; }
-        .equity-bar { height: 48px; border-radius: 12px; overflow: hidden; display: flex; background: rgba(255,255,255,0.05); }
-        .equity-fill { display: flex; align-items: center; padding: 0 16px; font-size: 0.85rem; color: white; font-weight: 600; }
-        .ai-card { border-color: rgba(139, 92, 246, 0.3); }
-        .title-with-icon { display: flex; align-items: center; gap: 12px; }
-        .accent-icon { color: var(--accent-secondary); }
-        .message { padding: 16px; background: rgba(255,255,255,0.03); border-radius: 12px; font-size: 0.95rem; line-height: 1.5; margin-bottom: 12px; border-left: 3px solid var(--accent-secondary); }
-        .message.alert { border-left-color: #f59e0b; color: #f59e0b; background: rgba(245, 158, 11, 0.05); }
-        .btn-ai { background: var(--accent-secondary); color: white; border: none; padding: 12px; border-radius: 10px; font-weight: 600; cursor: pointer; margin-top: auto; }
-        .balance-info { display: flex; flex-direction: column; gap: 4px; }
-        .amount { font-size: 2rem; font-weight: 700; color: var(--accent-primary); }
-        .subtitle { color: var(--text-secondary); font-size: 0.9rem; }
-
-        /* Multi-user Styles */
-        .current-profile { display: flex; align-items: center; gap: 12px; padding: 16px; background: rgba(255,255,255,0.03); border-radius: 12px; margin-bottom: 12px; cursor: pointer; transition: all 0.2s; }
-        .current-profile:hover { background: rgba(255,255,255,0.07); }
-        .avatar.mini { width: 32px; height: 32px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 0.8rem; font-weight: 700; color: white; }
-        .profile-info span { font-size: 0.9rem; font-weight: 600; display: block; }
-        .profile-info p { font-size: 0.7rem; color: var(--text-secondary); }
-
-        .scope-toggle .toggle-container { display: flex; background: rgba(255,255,255,0.05); padding: 4px; border-radius: 10px; gap: 4px; }
-        .scope-toggle button { flex: 1; padding: 8px; border: none; background: transparent; color: var(--text-secondary); cursor: pointer; border-radius: 8px; font-size: 0.85rem; }
-        .scope-toggle button.active { background: var(--panel-bg); color: var(--text-primary); }
-
-        .tx-header-row { display: flex; align-items: center; gap: 8px; }
-        .tx-scope-tag { font-size: 0.65rem; padding: 2px 6px; border-radius: 4px; font-weight: 700; text-transform: uppercase; }
-        .tx-scope-tag.shared { background: rgba(59, 130, 246, 0.1); color: #3b82f6; }
-        .tx-scope-tag.private { background: rgba(161, 161, 170, 0.1); color: #a1a1aa; }
-        .tx-type-tag { font-size: 0.6rem; padding: 2px 5px; border-radius: 4px; font-weight: 600; text-transform: uppercase; }
-        .tx-type-tag.fixed { background: rgba(245, 158, 11, 0.1); color: #f59e0b; }
-        .tx-type-tag.variable { background: rgba(16, 185, 129, 0.1); color: #10b981; }
-
-        /* Transactions Layout */
-        .transactions-view { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
-        .form-container { padding: 32px; display: flex; flex-direction: column; gap: 24px; }
-        .form-toggle { display: flex; background: rgba(255,255,255,0.05); padding: 4px; border-radius: 12px; }
-        .form-toggle button { flex: 1; padding: 10px; border: none; background: transparent; color: var(--text-secondary); border-radius: 10px; cursor: pointer; font-weight: 600; }
-        .form-toggle button.active { background: var(--panel-bg); color: var(--text-primary); box-shadow: 0 4px 12px rgba(0,0,0,0.2); }
-        
-        .transaction-form { display: flex; flex-direction: column; gap: 20px; }
-        .form-group { display: flex; flex-direction: column; gap: 8px; }
-        .form-group label { font-size: 0.9rem; color: var(--text-secondary); }
-        .form-group input, .form-group select { 
-          background: rgba(255,255,255,0.05); border: 1px solid var(--border-color); color: white; padding: 12px; border-radius: 10px; font-size: 1rem;
-        }
-        .select-with-add { display: flex; gap: 8px; }
-        .select-with-add select { flex: 1; }
-        .btn-add-cat { background: rgba(255,255,255,0.1); border: none; color: white; padding: 0 16px; border-radius: 10px; cursor: pointer; }
-        .new-cat-input { display: flex; gap: 8px; }
-        .new-cat-input input { flex: 1; }
-        .new-cat-input button { background: var(--accent-primary); border: none; color: white; padding: 0 12px; border-radius: 8px; }
-
-        .checkbox-group label { display: flex; align-items: center; gap: 10px; cursor: pointer; }
-        .expense-type-toggle .toggle-container { display: flex; background: rgba(255,255,255,0.05); padding: 4px; border-radius: 10px; gap: 4px; }
-        .expense-type-toggle button { flex: 1; padding: 8px; border: none; background: transparent; color: var(--text-secondary); cursor: pointer; border-radius: 8px; font-size: 0.85rem; }
-        .expense-type-toggle button.active { background: var(--panel-bg); color: var(--text-primary); }
-        .credit-details { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; padding: 16px; background: rgba(255,255,255,0.03); border-radius: 12px; border: 1px dashed var(--border-color); }
-
-        .btn-save { flex: 1; background: var(--accent-primary); color: white; border: none; padding: 16px; border-radius: 12px; font-weight: 700; font-size: 1.1rem; cursor: pointer; transition: transform 0.2s; }
-        .btn-save:hover { transform: translateY(-2px); }
-        .form-actions-row { display: flex; gap: 12px; margin-top: 12px; }
-        .btn-cancel { padding: 16px; background: rgba(255,255,255,0.05); border: 1px solid var(--border-color); color: var(--text-secondary); border-radius: 12px; cursor: pointer; font-weight: 600; display: flex; align-items: center; gap: 8px; transition: all 0.2s; }
-        .btn-cancel:hover { background: rgba(255,255,255,0.1); color: var(--text-primary); }
-
-        .recent-list { padding: 24px; display: flex; flex-direction: column; gap: 20px; }
-        .tx-list { display: flex; flex-direction: column; gap: 12px; }
-        .tx-item { padding: 16px; background: rgba(255,255,255,0.03); border-radius: 12px; display: flex; justify-content: space-between; align-items: center; border-left: 4px solid transparent; }
-        .tx-item.expense { border-left-color: #ef4444; }
-        .tx-item.income { border-left-color: var(--accent-primary); }
-        .tx-main { display: flex; flex-direction: column; }
-        .tx-cat { font-weight: 600; }
-        .tx-date { font-size: 0.8rem; color: var(--text-secondary); }
-        .tx-details { text-align: right; display: flex; flex-direction: column; gap: 4px; }
-        .tx-actions { display: flex; gap: 8px; justify-content: flex-end; opacity: 0; transition: opacity 0.2s; }
-        .tx-item:hover .tx-actions { opacity: 1; }
-        .action-btn { background: rgba(255,255,255,0.05); border: 1px solid var(--border-color); color: var(--text-secondary); padding: 6px; border-radius: 6px; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: all 0.2s; }
-        .action-btn.edit:hover { background: rgba(59, 130, 246, 0.1); color: #3b82f6; border-color: #3b82f6; }
-        .action-btn.delete:hover { background: rgba(239, 68, 68, 0.1); color: #ef4444; border-color: #ef4444; }
-        .tx-amount { font-weight: 700; font-size: 1.1rem; }
-        .tx-card-info { font-size: 0.75rem; color: var(--accent-secondary); }
-        .empty-msg { color: var(--text-secondary); text-align: center; padding: 40px; }
-
-        .title-stack { display: flex; flex-direction: column; gap: 4px; }
-        .month-select { 
-          background: rgba(255,255,255,0.05); border: none; color: var(--text-secondary); 
-          font-size: 0.8rem; padding: 4px 8px; border-radius: 4px; cursor: pointer; outline: none;
-        }
-        .chart-container { display: flex; align-items: flex-end; justify-content: space-around; height: 120px; padding-top: 20px; }
-        .chart-bar-group { display: flex; flex-direction: column; align-items: center; gap: 8px; flex: 1; }
-        .bar-wrapper { width: 30px; height: 100px; display: flex; align-items: flex-end; background: rgba(255,255,255,0.03); border-radius: 4px; overflow: hidden; }
-        .chart-bar { width: 100%; background: linear-gradient(to top, var(--accent-primary), var(--accent-secondary)); border-radius: 4px 4px 0 0; transition: height 0.3s ease; }
-        .bar-label { font-size: 0.75rem; color: var(--text-secondary); text-transform: capitalize; }
-        .status-icon { color: var(--accent-secondary); }
-
-        .permission-settings { display: flex; flex-direction: column; gap: 24px; padding: 12px 0; }
-        .permission-item { display: flex; justify-content: space-between; align-items: center; padding: 20px; background: rgba(255,255,255,0.03); border-radius: 16px; border: 1px solid var(--border-color); }
-        .perm-info h3 { font-size: 1rem; margin-bottom: 4px; }
-        .perm-info p { font-size: 0.85rem; color: var(--text-secondary); }
-        .user-auth-status { display: flex; align-items: center; gap: 12px; font-size: 0.9rem; }
-        .btn-toggle { padding: 8px 16px; border-radius: 20px; border: 1px solid var(--border-color); background: transparent; color: var(--text-secondary); cursor: pointer; transition: all 0.2s; }
-        .btn-toggle.active { background: var(--accent-primary); border-color: var(--accent-primary); color: white; }
-        .permission-alert { display: flex; align-items: center; gap: 12px; padding: 16px; background: rgba(59, 130, 246, 0.05); border-radius: 12px; font-size: 0.9rem; color: #3b82f6; }
-        
-        .list-header-actions { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
-        .partner-toggle { font-size: 0.85rem; color: var(--text-secondary); }
-        .switch-label { display: flex; align-items: center; gap: 8px; cursor: pointer; }
-
-        .income-split { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
-        .amount.small { font-size: 1.4rem; }
-        .mt-12 { margin-top: 12px; }
-
-        .bar-trio { display: flex; gap: 4px; height: 100px; align-items: flex-end; }
-        .bar-wrapper.mini { width: 10px; height: 100%; display: flex; align-items: flex-end; background: rgba(255,255,255,0.03); border-radius: 2px; }
-        .chart-bar.leo-v { background: var(--accent-primary); }
-        .chart-bar.cris-v { background: #10b981; }
-        .chart-bar.shared-v { background: var(--accent-secondary); }
-        .chart-legend { display: flex; justify-content: center; gap: 16px; margin-top: 16px; font-size: 0.75rem; color: var(--text-secondary); }
-        .leg-item { display: flex; align-items: center; gap: 6px; }
-        .dot { width: 8px; height: 8px; border-radius: 2px; }
-        .dot.leo { background: var(--accent-primary); }
-        .dot.cris { background: #10b981; }
-        .dot.shared { background: var(--accent-secondary); }
-
-        .breakdown-stats { display: flex; flex-direction: column; gap: 16px; }
-        .stat-item { display: flex; gap: 12px; align-items: center; }
-        .stat-info { flex: 1; display: flex; flex-direction: column; gap: 6px; }
-        .stat-info p { font-size: 0.85rem; color: var(--text-secondary); }
-        .mini-progress { height: 4px; background: rgba(255,255,255,0.05); border-radius: 2px; overflow: hidden; }
-        .mini-progress .fill { height: 100%; transition: width 0.3s; }
-        .mini-progress .fill.fixed { background: #f59e0b; }
-        .mini-progress .fill.variable { background: #10b981; }
-        .dot.fixed { background: #f59e0b; }
-        .dot.variable { background: #10b981; }
-
-        .forecast-table-container { margin-top: 10px; overflow-x: auto; }
-        .forecast-table { width: 100%; border-collapse: collapse; text-align: left; }
-        .forecast-table th { padding: 12px; font-size: 0.85rem; color: var(--text-secondary); border-bottom: 1px solid var(--border-color); }
-        .forecast-table td { padding: 12px; font-size: 0.95rem; border-bottom: 1px solid rgba(255,255,255,0.03); }
-        .forecast-table .month-name { font-weight: 600; text-transform: capitalize; color: var(--accent-primary); }
-        .forecast-table .total-cell { font-weight: 700; }
-        .status-pill { padding: 4px 8px; border-radius: 6px; font-size: 0.75rem; font-weight: 700; }
-        .status-pill.success { background: rgba(16, 185, 129, 0.1); color: #10b981; }
-        .status-pill.danger { background: rgba(239, 68, 68, 0.1); color: #ef4444; }
-        .status-pill.neutral { background: rgba(255, 255, 255, 0.05); color: var(--text-secondary); }
-      `}</style>
-        </div >
-    );
-}
-
-function NavItem({ icon, label, active, onClick }: any) {
-    return (
-        <div className={`nav-item ${active ? 'active' : ''}`} onClick={onClick}>
-            {icon}
-            <span>{label}</span>
+                {activeTab === 'simulator' && (
+                    <div className="card glass-panel animate-fade-in">
+                        <h2>Simulador de Impacto IA</h2>
+                        <p className="subtitle">Em breve: Consulte o Copilot antes de grandes compras.</p>
+                    </div>
+                )}
+            </main>
         </div>
     )
 }
